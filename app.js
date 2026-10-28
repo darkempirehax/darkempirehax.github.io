@@ -5,9 +5,12 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 "use strict";
-const COLORS = ["#3a6fd8","#d4513f","#c48a12","#7b5cd6","#1f9a8a","#c2508f","#5f7f2e","#d0712b"];
+const COLORS = ["#3a6fd8","#5aa9f0","#22b8cf","#1f9a8a","#2fbf71","#5f7f2e","#a3c94a","#e8c23a","#c48a12","#d0712b","#d4513f","#b3263e","#e04f86","#c2508f","#7b5cd6","#a77ef0","#8d6e63","#9ea7b3","#f1f0ec"];
 const POS = {ARQ:"Arquero",DEF:"Defensor",MED:"Medio",DEL:"Delantero"};
-const TABS = [["partidos","Partidos"],["estadisticas","Estadísticas"],["plantel","Plantel"],["ligas","Ligas"]];
+const TABS = [["partidos","Partidos"],["calendario","Calendario"],["estadisticas","Estadísticas"],["plantel","Plantel"],["ligas","Ligas"]];
+const TZ = "America/Argentina/Buenos_Aires";
+const todayStr = () => new Intl.DateTimeFormat("en-CA",{timeZone:TZ}).format(new Date());
+const CAL_SLOTS = 5;
 const MAX_REC = 900 * 1024;
 const EMPTY = () => ({club:{name:"Dark Empire"}, leagues:[], players:[], matches:[]});
 
@@ -17,7 +20,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
-const ui = {tab:"partidos", league:"all", sort:"g", open:null};
+const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.league = sv.league || "all"; ui.sort = sv.sort || "g"; } }catch(e){}
 function saveUi(){ try{ localStorage.setItem("hx_ui", JSON.stringify({league:ui.league, sort:ui.sort})); }catch(e){} }
 function fromHash(){ const h = location.hash.slice(1); if(TABS.some(t => t[0]===h)) ui.tab = h; }
@@ -100,7 +103,7 @@ function render(){
     + '</div></div></header>';
   h += '<nav class="tabs gut" aria-label="Secciones"><div class="inner">'+TABS.map(t =>
       '<a href="#'+t[0]+'"'+(ui.tab===t[0]?' aria-current="page"':'')+'>'+t[1]+'</a>').join("")+'</div></nav>';
-  h += '<main class="gut"><div class="inner">'+({partidos:vMatches,estadisticas:vStats,plantel:vPlayers,ligas:vLeagues}[ui.tab])()+'</div></main>';
+  h += '<main class="gut"><div class="inner">'+({partidos:vMatches,calendario:vCalendar,estadisticas:vStats,plantel:vPlayers,ligas:vLeagues}[ui.tab])()+'</div></main>';
   h += '<footer class="gut"><div class="inner foot-row"><span>'+(canWrite ? 'Lo que guardás se ve al instante para todos.' : 'Los capitanes actualizan esta página.')+'</span>'
     + (canWrite ? '<button class="linkbtn" data-act="logout">Salir del modo capitán</button>' : '<button class="linkbtn" data-act="login">¿Sos capitán? Entrar</button>')
     + '</div></footer>';
@@ -140,11 +143,16 @@ function matchRow(m){
   let h = '<article class="match"><button class="mrow" data-act="m-open" data-id="'+esc(m.id)+'" aria-expanded="'+open+'"'+(clickable?'':' disabled')+'>'
     + '<div class="mdate"><b>'+esc(fmtDate(m.date))+'</b><span>'+esc(m.time||"Sin hora")+'</span></div>'
     + '<div style="min-width:0"><div class="mmeta">'+lgBadge(m.league)+(m.round?' · '+esc(m.round):'')+(m.rec?' <span class="rectag" title="Tiene grabación">REC</span>':'')+'</div><div class="mrival">vs '+esc(m.rival)+'</div></div>'
-    + (r==="DF" ? '<div class="score DF" aria-label="Ganado por DF, 3 a 0" title="El rival no se presentó (3–0)">DF</div>'
-      : r ? '<div class="score num '+r+'" aria-label="Resultado '+(+m.gf)+' a '+(+m.gc)+'">'+(+m.gf)+'–'+(+m.gc)+'</div>' : '<span class="pend">Pendiente</span>')
+    + scoreBadge(m)
     + '</button>';
-  if(open){
-    h += '<div class="mdetail">';
+  if(open) h += '<div class="mdetail">'+matchInfo(m)+'</div>';
+  return h + '</article>';
+}
+function scoreBadge(m){ const r=res(m);
+  return r==="DF" ? '<div class="score DF" aria-label="Ganado por DF, 3 a 0" title="El rival no se presentó (3–0)">DF</div>'
+    : r ? '<div class="score num '+r+'" aria-label="Resultado '+(+m.gf)+' a '+(+m.gc)+'">'+(+m.gf)+'–'+(+m.gc)+'</div>' : '<span class="pend">Pendiente</span>'; }
+function matchInfo(m){
+  const r = res(m); let h = '';
     if(r==="DF"){ h += '<div>Ganado 3–0 por DF: el rival no se presentó.</div>'+(m.notes?'<div>'+esc(m.notes)+'</div>':''); }
     else if(r){
       const list = f => (m.lineup||[]).filter(x => +x[f]>0).sort((a,b) => b[f]-a[f]).map(x => esc(pname(x.p))+(x[f]>1?" ×"+x[f]:"")).join(", ");
@@ -153,9 +161,51 @@ function matchRow(m){
     } else if(m.notes){ h += '<div>'+esc(m.notes)+'</div>'; }
     if(m.rec) h += '<div class="recbox"><button class="btn small" data-act="rec-dl" data-id="'+esc(m.id)+'">Descargar grabación ('+kb(m.rec.size||0)+')</button><span class="hint">Para verla, abrila en <a href="https://www.haxball.com/replay" target="_blank" rel="noopener">haxball.com/replay</a>.</span></div>';
     if(canWrite) h += '<div class="acts"><button class="btn small ghost" data-act="m-edit" data-id="'+esc(m.id)+'">'+(r?'Editar resultado':'Cargar resultado / editar')+'</button></div>';
-    h += '</div>';
+  if(!h) h = '<div class="hint">'+(r ? 'Sin detalles cargados.' : 'Partido programado.')+'</div>';
+  return h;
+}
+function matchModal(m){
+  const d = m.date ? new Date(m.date+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"}) : "Sin fecha";
+  openModal('<div class="pview"><div class="mmeta">'+lgBadge(m.league)+(m.round?' · '+esc(m.round):'')+(m.rec?' <span class="rectag">REC</span>':'')+'</div>'
+    + '<div class="mhead"><div style="min-width:0"><h2>vs '+esc(m.rival)+'</h2><div class="hint">'+esc(d.charAt(0).toUpperCase()+d.slice(1))+(m.time?' · '+esc(m.time):'')+'</div></div>'+scoreBadge(m)+'</div>'
+    + '<div class="mdetail boxed">'+matchInfo(m)+'</div>'
+    + '<div class="mfoot"><button type="button" class="btn" data-act="close">Cerrar</button></div></div>');
+}
+function vCalendar(){
+  const [y,mo] = ui.cal.split("-").map(Number);
+  const pad = n => String(n).padStart(2,"0");
+  const first = new Date(Date.UTC(y,mo-1,1)), days = new Date(Date.UTC(y,mo,0)).getUTCDate();
+  const lead = (first.getUTCDay()+6)%7;
+  const monthName = first.toLocaleDateString("es-AR",{month:"long",year:"numeric",timeZone:"UTC"});
+  const byDay = {};
+  S.matches.filter(inLeague).forEach(m => { if(m.date && m.date.slice(0,7)===ui.cal) (byDay[m.date] = byDay[m.date] || []).push(m); });
+  Object.values(byDay).forEach(a => a.sort((p,q) => (p.time||"99:99").localeCompare(q.time||"99:99")));
+  const t = todayStr(), thisMonth = t.slice(0,7);
+  const label = {G:"Ganado",E:"Empate",P:"Perdido",DF:"DF"};
+  let h = '<div class="bar">'+leagueChips()+'</div>';
+  h += '<div class="calhead"><button class="btn ghost small calnav" data-act="cal" data-id="-1" aria-label="Mes anterior">‹</button>'
+    + '<h2 class="calmonth">'+esc(monthName)+'</h2>'
+    + '<button class="btn ghost small calnav" data-act="cal" data-id="1" aria-label="Mes siguiente">›</button>'
+    + (ui.cal!==thisMonth ? '<button class="btn ghost small" data-act="cal" data-id="0">Hoy</button>' : '')+'</div>';
+  h += '<div class="cal">'+["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(w => '<div class="calwd">'+w+'</div>').join("");
+  for(let i=0;i<lead;i++) h += '<div class="calday blank" aria-hidden="true"></div>';
+  for(let d=1; d<=days; d++){
+    const ds = ui.cal+"-"+pad(d), ms = byDay[ds] || [];
+    let strips = '';
+    for(let s=0; s<CAL_SLOTS; s++){
+      const m = ms[s];
+      if(!m){ strips += '<span class="strip empty"></span>'; continue; }
+      const r = res(m), l = L(m.league), ln = l ? l.name : "Sin liga";
+      const desc = (m.time?m.time+' · ':'')+'vs '+m.rival+' · '+ln+' · '+(r==="DF"?"DF (3–0)":r?(+m.gf)+'–'+(+m.gc)+' '+label[r]:"Programado");
+      strips += '<button class="strip '+(r||"PEND")+'" style="--lg:'+esc(l?l.color:"#777")+'" data-act="m-view" data-id="'+esc(m.id)+'" title="'+esc(desc)+'" aria-label="'+esc(desc)+'"><span>'+esc(ln)+'</span></button>';
+    }
+    h += '<div class="calday'+(ds===t?' today':'')+'"><div class="calnum"><span>'+d+'</span>'+(ms.length>CAL_SLOTS?'<em>+'+(ms.length-CAL_SLOTS)+'</em>':'')+'</div><div class="strips">'+strips+'</div></div>';
   }
-  return h + '</article>';
+  const tail = (7 - (lead+days)%7) % 7;
+  for(let i=0;i<tail;i++) h += '<div class="calday blank" aria-hidden="true"></div>';
+  h += '</div>';
+  h += '<div class="legend"><span><i class="strip G"></i>Ganado</span><span><i class="strip E"></i>Empate</span><span><i class="strip P"></i>Perdido</span><span><i class="strip DF"></i>DF</span><span><i class="strip PEND"></i>Programado</span><span class="hint">El borde izquierdo tiene el color de la liga.</span></div>';
+  return h;
 }
 function vStats(){
   const t = stats(S.matches.filter(inLeague));
@@ -352,15 +402,17 @@ function leagueForm(l){
     + '<label class="f">Nombre<input type="text" id="f-lname" required maxlength="40" value="'+esc(l.name)+'" placeholder="Liga Argentina de Haxball"></label>'
     + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label></div>'
     + '<label class="f">Link de la tabla de posiciones<input type="text" id="f-llink" autocomplete="off" maxlength="300" inputmode="url" value="'+esc(l.link||"")+'" placeholder="https://challenge.place/c/..."><span class="hint" id="llhint">Opcional. Pegá el link de la liga en challenge.place (o donde publiquen la tabla).</span></label>'
-    + '<div class="chips" role="radiogroup" aria-label="Color">'+COLORS.map((c,i) => '<label class="chip"><input type="radio" name="lc" id="lc-'+i+'" value="'+c+'"'+(c===l.color?' checked':'')+' style="accent-color:'+c+'"><span class="dot" style="--lg:'+c+'"></span></label>').join("")+'</div>'
+    + '<div class="filein"><span>Color</span><div class="swatches" role="radiogroup" aria-label="Color">'+COLORS.map((c,i) => '<label class="swatch" style="--sw:'+c+'" title="'+c+'"><input type="radio" name="lc" id="lc-'+i+'" value="'+c+'"'+(c===l.color?' checked':'')+' aria-label="Color '+(i+1)+'"></label>').join("")
+    + '<label class="swatch custom" title="Elegir otro color"><input type="radio" name="lc" id="lc-x" value="custom"'+(COLORS.includes(l.color)?'':' checked')+' aria-label="Otro color"><input type="color" id="f-lcolor" value="'+(COLORS.includes(l.color)||!/^#[0-9a-f]{6}$/i.test(l.color||"")?'#888888':esc(l.color))+'" aria-label="Elegir otro color"><span>Otro</span></label></div></div>'
     + (used ? '<div class="hint">Tiene '+used+' partido'+(used===1?'':'s')+'. Para borrarla, primero borrá esos partidos o pasalos a otra liga.</div>' : '')
     + foot(isNew||used ? "" : "¿Borrar esta liga?")+'</form>');
   const form=document.getElementById("lf");
+  document.getElementById("f-lcolor").addEventListener("input", () => { document.getElementById("lc-x").checked = true; });
   onDelete = () => commit(n => { n.leagues=n.leagues.filter(x => x.id!==l.id); }, "Liga borrada");
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-lname").value.trim(); if(!nm) return;
-    const c=form.querySelector('input[name="lc"]:checked'); let rawLink=document.getElementById("f-llink").value.trim(); if(rawLink && !/^[a-z]+:/i.test(rawLink)) rawLink="https://"+rawLink; const link=rawLink?safeUrl(rawLink):"";
+    const c=form.querySelector('input[name="lc"]:checked'); const pick = c && c.value==="custom" ? document.getElementById("f-lcolor").value : (c ? c.value : l.color); const color = /^#[0-9a-f]{6}$/i.test(pick) ? pick : l.color; let rawLink=document.getElementById("f-llink").value.trim(); if(rawLink && !/^[a-z]+:/i.test(rawLink)) rawLink="https://"+rawLink; const link=rawLink?safeUrl(rawLink):"";
     if(rawLink && !link){ const hh=document.getElementById("llhint"); hh.textContent="Ese link no es válido: tiene que empezar con https://"; hh.className="hint warn"; document.getElementById("f-llink").focus(); return; }
-    const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),color:c?c.value:l.color,link};
+    const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),color,link};
     commit(n => { const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
 }
 function clubForm(){
@@ -418,6 +470,8 @@ document.addEventListener("click", e => {
   if(a==="del-yes"){ if(onDelete) onDelete(); return; }
   if(a==="lg"){ ui.league=id; saveUi(); render(); return; }
   if(a==="sort"){ ui.sort=id; saveUi(); render(); return; }
+  if(a==="cal"){ if(id==="0") ui.cal = todayStr().slice(0,7); else { const [yy,mm]=ui.cal.split("-").map(Number); const dt=new Date(Date.UTC(yy,mm-1+Number(id),1)); ui.cal = dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0"); } render(); return; }
+  if(a==="m-view"){ const m=S.matches.find(x => x.id===id); if(m) matchModal(m); return; }
   if(a==="m-open"){ ui.open = ui.open===id ? null : id; render(); return; }
   if(a==="rec-dl"){ const m = S.matches.find(x => x.id===id); if(m && m.rec) downloadRec(m); return; }
   if(a==="p-view"){ const p=P(id); if(p) playerView(p); return; }
