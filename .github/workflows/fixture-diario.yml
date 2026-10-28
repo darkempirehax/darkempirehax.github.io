@@ -1,1 +1,32 @@
+name: Fixture del día en Discord
+
+on:
+  schedule:
+    # Todos los días a las 11:57 de Argentina (14:57 UTC). GitHub suele demorar
+    # unos minutos, así que el mensaje llega alrededor de las 12:00.
+    - cron: "57 14 * * *"
+  workflow_dispatch:
+    inputs:
+      fecha:
+        description: "Fecha para probar (AAAA-MM-DD). Vacío = hoy."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Mandar partidos del día
+        run: node scripts/fixture-diario.mjs
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_MENCION: ${{ vars.DISCORD_MENCION }}
+          FECHA: ${{ inputs.fecha }}
 
