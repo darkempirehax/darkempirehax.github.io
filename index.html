@@ -129,7 +129,7 @@ td.hl{font-weight:700}
 button.card{cursor:pointer}
 .card h3{font-size:22px;font-weight:700;display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
 .card .sub{font-size:13px;color:var(--muted)}
-.shirt{font:800 16px var(--f-display);min-width:30px;height:30px;border-radius:3px;display:inline-grid;place-items:center;background:var(--ink);color:var(--bg);flex:0 0 auto}
+.shirt{font:800 16px var(--f-display);min-width:30px;height:30px;padding:0 6px;white-space:nowrap;border-radius:3px;display:inline-grid;place-items:center;background:var(--ink);color:var(--bg);flex:0 0 auto}
 .minis{display:flex;gap:12px;font-size:13px;color:var(--muted)}
 .minis b{color:var(--ink);font-variant-numeric:tabular-nums}
 
@@ -153,6 +153,10 @@ textarea{min-height:140px;resize:vertical}
 .scorein span{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
 .lineup td,.lineup th{padding:6px 8px}
 .lineup input[type=number]{width:62px;text-align:center;padding:6px}
+.poschk input{position:absolute;opacity:0;pointer-events:none}
+.poschk label:has(input:checked){background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.poschk label:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:2px}
+.pos+.pos{margin-left:3px}
 .hint{font-size:13px;color:var(--muted)}
 .hint.warn{color:var(--loss)}
 .mfoot{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}

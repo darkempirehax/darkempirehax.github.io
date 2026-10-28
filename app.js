@@ -63,6 +63,7 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&am
 function uid(){ return Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-3); }
 const L = id => S.leagues.find(l => l.id===id);
 const P = id => S.players.find(p => p.id===id);
+const posList = p => (Array.isArray(p.pos) ? p.pos : (p.pos ? [p.pos] : [])).filter(k => POS[k]);
 const pname = id => { const p=P(id); return p ? p.name : "(jugador borrado)"; };
 function fmtDate(d){ if(!d) return "Sin fecha"; const x=new Date(d+"T12:00:00"); if(isNaN(x)) return d;
   return x.toLocaleDateString("es-AR",{weekday:"short",day:"2-digit",month:"2-digit"}).replace(",",""); }
@@ -166,18 +167,18 @@ function vStats(){
   const cols=[["name","Jugador"],["pj","PJ"],["g","Goles"],["a","Asist."],["ga","G+A"],["mvp","Figura"]];
   h += '<div class="tablewrap"><table><thead><tr>'+cols.map(c => '<th scope="col"><button data-act="sort" data-id="'+c[0]+'" aria-pressed="'+(k===c[0])+'">'+c[1]+(k===c[0]&&c[0]!=="name"?" ▾":"")+'</button></th>').join("")+'<th scope="col">Prom. gol</th></tr></thead><tbody>'
     + rows.map(s => { const p=P(s.id), hl = c => k===c?' class="hl"':'';
-      return '<tr'+(p.active===false?' class="off"':'')+'><td>'+esc(p.name)+(p.pos?'<span class="pos">'+esc(p.pos)+'</span>':'')+'</td><td>'+s.pj+'</td><td'+hl("g")+'>'+s.g+'</td><td'+hl("a")+'>'+s.a+'</td><td'+hl("ga")+'>'+(s.g+s.a)+'</td><td'+hl("mvp")+'>'+s.mvp+'</td><td>'+(s.pj?(s.g/s.pj).toFixed(2):"—")+'</td></tr>'; }).join("")
+      return '<tr'+(p.active===false?' class="off"':'')+'><td>'+esc(p.name)+posList(p).map(k => '<span class="pos">'+esc(k)+'</span>').join("")+'</td><td>'+s.pj+'</td><td'+hl("g")+'>'+s.g+'</td><td'+hl("a")+'>'+s.a+'</td><td'+hl("ga")+'>'+(s.g+s.a)+'</td><td'+hl("mvp")+'>'+s.mvp+'</td><td>'+(s.pj?(s.g/s.pj).toFixed(2):"—")+'</td></tr>'; }).join("")
     + '</tbody></table></div>';
   return h;
 }
 function vPlayers(){
   const t = stats(S.matches);
-  const sorter = (a,b) => (+a.num||999)-(+b.num||999) || a.name.localeCompare(b.name);
+  const sorter = (a,b) => a.name.localeCompare(b.name);
   const act = S.players.filter(p => p.active!==false).sort(sorter), off = S.players.filter(p => p.active===false).sort(sorter);
   let h = '<div class="bar"><h2 style="font-size:22px;font-weight:600">Plantel <small class="hint">'+act.length+' jugadores</small></h2>'+(canWrite?'<button class="btn" data-act="p-new">+ Agregar jugadores</button>':'')+'</div>';
   if(!S.players.length) return h + '<div class="empty">'+(canWrite?'Agregá a tus jugadores: podés pegar todos los nicks juntos, uno por línea.':'Todavía no hay jugadores cargados.')+'</div>';
   function card(p){ const s=t[p.id]; const inner = '<h3><span class="shirt num">'+esc(p.num||"·")+'</span>'+esc(p.name)+'</h3>'
-      + '<div class="sub">'+esc(POS[p.pos]||"Sin posición")+(p.active===false?' · De baja':'')+'</div>'
+      + '<div class="sub">'+esc(posList(p).map(k => POS[k]).join(" · ")||"Sin posición")+(p.active===false?' · De baja':'')+'</div>'
       + '<div class="minis"><span><b>'+s.pj+'</b> PJ</span><span><b>'+s.g+'</b> goles</span><span><b>'+s.a+'</b> asist.</span></div>';
     return canWrite ? '<button class="card" data-act="p-edit" data-id="'+esc(p.id)+'">'+inner+'</button>' : '<div class="card">'+inner+'</div>'; }
   h += '<div class="grid">'+act.map(card).join("")+'</div>';
@@ -300,8 +301,8 @@ function playerForm(p){
   const t = stats(S.matches)[p.id], hasStats = t.pj>0 || S.matches.some(m => m.mvp===p.id);
   openModal('<form id="pe"><h2>'+esc(p.name)+'</h2><div class="fields">'
     + '<label class="f">Nick<input type="text" id="f-pname" required maxlength="40" value="'+esc(p.name)+'"></label>'
-    + '<label class="f">Posición<select id="f-pos"><option value="">Sin posición</option>'+Object.keys(POS).map(k => '<option value="'+k+'"'+(p.pos===k?' selected':'')+'>'+POS[k]+'</option>').join("")+'</select></label>'
-    + '<label class="f">Número<input type="number" id="f-num" min="0" max="99" value="'+esc(p.num||"")+'"></label></div>'
+        + '<label class="f">Avatar<input type="text" id="f-num" maxlength="6" autocomplete="off" placeholder="Ej: 10, ☠, DE" value="'+esc(p.num||"")+'"></label></div>'
+    + '<div class="filein"><span>Posiciones (podés marcar varias)</span><div class="chips poschk" role="group" aria-label="Posiciones">'+Object.keys(POS).map(k => '<label class="chip"><input type="checkbox" name="pos" id="pos-'+k+'" value="'+k+'"'+(posList(p).includes(k)?' checked':'')+'>'+POS[k]+'</label>').join("")+'</div></div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="ac" id="ac-1" value="1"'+(p.active!==false?' checked':'')+'>En el plantel</label><label><input type="radio" name="ac" id="ac-0" value="0"'+(p.active===false?' checked':'')+'>De baja</label></div>'
     + (hasStats ? '<div class="hint">Tiene estadísticas cargadas: si se va del club, dalo de baja en vez de borrarlo así no se pierden.</div>' : '')
     + foot(hasStats ? "Borrarlo también saca sus goles y asistencias de las estadísticas. ¿Seguro?" : "¿Borrar a este jugador?")+'</form>');
@@ -309,7 +310,7 @@ function playerForm(p){
   onDelete = () => commit(n => { n.players=n.players.filter(x => x.id!==p.id);
     n.matches.forEach(m => { if(m.lineup) m.lineup=m.lineup.filter(r => r.p!==p.id); if(m.mvp===p.id) m.mvp=null; }); }, "Jugador borrado");
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-pname").value.trim(); if(!nm) return;
-    const upd={name:nm, pos:document.getElementById("f-pos").value, num:document.getElementById("f-num").value, active: form.querySelector('input[name="ac"]:checked').value==="1"};
+    const upd={name:nm, pos:[...form.querySelectorAll('input[name="pos"]:checked')].map(x => x.value), num:document.getElementById("f-num").value.trim(), active: form.querySelector('input[name="ac"]:checked').value==="1"};
     commit(n => { const x = n.players.find(x => x.id===p.id); if(x) Object.assign(x, upd); }, "Jugador actualizado"); });
 }
 function leagueForm(l){
