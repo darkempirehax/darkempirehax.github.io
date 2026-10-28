@@ -82,6 +82,8 @@ function stats(list){
     if(m.mvp && t[m.mvp]) t[m.mvp].mvp++; });
   return t;
 }
+function safeUrl(u){ try{ const x=new URL(String(u||"").trim()); return (x.protocol==="https:"||x.protocol==="http:") ? x.href : ""; }catch(e){ return ""; } }
+function tablaBtn(l){ const u=safeUrl(l && l.link); return u ? '<a class="btn ghost small" href="'+esc(u)+'" target="_blank" rel="noopener">Ver tabla ↗</a>' : ''; }
 function lgBadge(id){ const l=L(id); return l ? '<span class="dot" style="--lg:'+esc(l.color)+'"></span>'+esc(l.name) : "Sin liga"; }
 
 /* ---------- vistas ---------- */
@@ -127,6 +129,7 @@ function startGuide(){
 function vMatches(){
   const list = S.matches.filter(inLeague), up = upcoming(list), pl = played(list);
   let h = '<div class="bar">'+leagueChips()+(canWrite ? '<button class="btn" data-act="m-new"'+(S.leagues.length?'':' disabled title="Primero creá una liga"')+'>+ Partido</button>' : '')+'</div>';
+  if(ui.league!=="all" && tablaBtn(L(ui.league))) h += '<div class="acts">'+tablaBtn(L(ui.league))+'</div>';
   if(!S.matches.length) return h + startGuide();
   h += '<section class="sec"><h2>Próximos <small>'+up.length+'</small></h2>'+(up.length ? '<div class="list">'+up.map(matchRow).join("")+'</div>' : '<div class="empty">No hay partidos pendientes'+(ui.league!=="all"?" en esta liga":"")+'.</div>')+'</section>';
   h += '<section class="sec"><h2>Resultados <small>'+pl.length+'</small></h2>'+(pl.length ? '<div class="list">'+pl.map(matchRow).join("")+'</div>' : '<div class="empty">Todavía no hay resultados cargados.</div>')+'</section>';
@@ -195,7 +198,8 @@ function vLeagues(){
     const inner = '<h3><span class="dot" style="--lg:'+esc(l.color)+';width:12px;height:12px"></span>'+esc(l.name)+'</h3>'
       + '<div class="sub">'+(l.note?esc(l.note)+' · ':'')+pend+' pendiente'+(pend===1?'':'s')+'</div>'
       + '<div class="minis num"><span><b>'+r.pj+'</b> PJ</span><span><b>'+r.g+'-'+r.e+'-'+r.p+'</b> G-E-P</span>'+(r.df?'<span><b>'+r.df+'</b> DF</span>':'')+'</div>';
-    return canWrite ? '<button class="card" data-act="l-edit" data-id="'+esc(l.id)+'">'+inner+'</button>' : '<div class="card">'+inner+'</div>';
+    const acts = tablaBtn(l) + (canWrite ? '<button class="btn ghost small" data-act="l-edit" data-id="'+esc(l.id)+'">Editar</button>' : '');
+    return '<div class="card">'+inner+(acts?'<div class="acts">'+acts+'</div>':'')+'</div>';
   }).join("")+'</div>';
   return h;
 }
@@ -347,13 +351,16 @@ function leagueForm(l){
   openModal('<form id="lf"><h2>'+(isNew?'Nueva liga':esc(l.name))+'</h2><div class="fields">'
     + '<label class="f">Nombre<input type="text" id="f-lname" required maxlength="40" value="'+esc(l.name)+'" placeholder="Liga Argentina de Haxball"></label>'
     + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label></div>'
+    + '<label class="f">Link de la tabla de posiciones<input type="text" id="f-llink" autocomplete="off" maxlength="300" inputmode="url" value="'+esc(l.link||"")+'" placeholder="https://challenge.place/c/..."><span class="hint" id="llhint">Opcional. Pegá el link de la liga en challenge.place (o donde publiquen la tabla).</span></label>'
     + '<div class="chips" role="radiogroup" aria-label="Color">'+COLORS.map((c,i) => '<label class="chip"><input type="radio" name="lc" id="lc-'+i+'" value="'+c+'"'+(c===l.color?' checked':'')+' style="accent-color:'+c+'"><span class="dot" style="--lg:'+c+'"></span></label>').join("")+'</div>'
     + (used ? '<div class="hint">Tiene '+used+' partido'+(used===1?'':'s')+'. Para borrarla, primero borrá esos partidos o pasalos a otra liga.</div>' : '')
     + foot(isNew||used ? "" : "¿Borrar esta liga?")+'</form>');
   const form=document.getElementById("lf");
   onDelete = () => commit(n => { n.leagues=n.leagues.filter(x => x.id!==l.id); }, "Liga borrada");
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-lname").value.trim(); if(!nm) return;
-    const c=form.querySelector('input[name="lc"]:checked'); const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),color:c?c.value:l.color};
+    const c=form.querySelector('input[name="lc"]:checked'); let rawLink=document.getElementById("f-llink").value.trim(); if(rawLink && !/^[a-z]+:/i.test(rawLink)) rawLink="https://"+rawLink; const link=rawLink?safeUrl(rawLink):"";
+    if(rawLink && !link){ const hh=document.getElementById("llhint"); hh.textContent="Ese link no es válido: tiene que empezar con https://"; hh.className="hint warn"; document.getElementById("f-llink").focus(); return; }
+    const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),color:c?c.value:l.color,link};
     commit(n => { const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
 }
 function clubForm(){
