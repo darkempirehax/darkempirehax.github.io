@@ -143,11 +143,14 @@ function matchRow(m){
   let h = '<article class="match"><button class="mrow" data-act="m-open" data-id="'+esc(m.id)+'" aria-expanded="'+open+'"'+(clickable?'':' disabled')+'>'
     + '<div class="mdate"><b>'+esc(fmtDate(m.date))+'</b><span>'+esc(m.time||"Sin hora")+'</span></div>'
     + '<div style="min-width:0"><div class="mmeta">'+lgBadge(m.league)+(m.round?' · '+esc(m.round):'')+(m.rec?' <span class="rectag" title="Tiene grabación">REC</span>':'')+'</div><div class="mrival">vs '+esc(m.rival)+'</div></div>'
+    + '<div class="mscorers">'+scorersText(m)+(res(m) && res(m)!=="DF" && m.mvp ? '<div class="mvpline"><span class="mvptag">Figura</span> '+esc(pname(m.mvp))+'</div>' : '')+'</div>'
     + scoreBadge(m)
     + '</button>';
   if(open) h += '<div class="mdetail">'+matchInfo(m)+'</div>';
   return h + '</article>';
 }
+function scorersText(m){ const r=res(m); if(!r || r==="DF") return "";
+  return (m.lineup||[]).filter(x => +x.g>0).sort((p,q) => q.g-p.g || pname(p.p).localeCompare(pname(q.p))).map(x => esc(pname(x.p))+' x'+(+x.g)).join(", "); }
 function scoreBadge(m){ const r=res(m);
   return r==="DF" ? '<div class="score DF" aria-label="Ganado por DF, 3 a 0" title="El rival no se presentó (3–0)">DF</div>'
     : r ? '<div class="score num '+r+'" aria-label="Resultado '+(+m.gf)+' a '+(+m.gc)+'">'+(+m.gf)+'–'+(+m.gc)+'</div>' : '<span class="pend">Pendiente</span>'; }

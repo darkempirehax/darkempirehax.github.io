@@ -85,7 +85,7 @@ main .inner{display:grid;gap:22px}
 /* partidos */
 .list{display:grid;gap:8px}
 .match{background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden}
-.mrow{display:grid;grid-template-columns:96px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;width:100%;text-align:left;background:none;border:0;cursor:pointer}
+.mrow{display:grid;grid-template-columns:96px minmax(0,1fr) minmax(0,1.2fr) auto;gap:12px;align-items:center;padding:12px 14px;width:100%;text-align:left;background:none;border:0;cursor:pointer}
 .mrow[disabled]{cursor:default}
 .mdate{display:grid;line-height:1.15}
 .mdate b{font:700 19px var(--f-display);text-transform:capitalize;white-space:nowrap}
@@ -229,6 +229,10 @@ button.strip:hover{filter:brightness(1.25)}
 .swatch.custom input[type=color]{width:24px;height:24px;border:0;padding:0;background:none;border-radius:50%;cursor:pointer}
 .swatch.custom input[type=color]::-webkit-color-swatch-wrapper{padding:0}
 .swatch.custom input[type=color]::-webkit-color-swatch{border:0;border-radius:50%}
+.mscorers{font-size:16px;font-weight:400;font-feature-settings:"calt" 0;color:var(--ink);opacity:.82;min-width:0;overflow-wrap:anywhere;line-height:1.35}
+@media (max-width:640px){.mrow{grid-template-columns:80px minmax(0,1fr) auto;row-gap:4px}.mrow .mdate{grid-row:1 / span 2}.mrow .score,.mrow .pend{grid-column:3;grid-row:1 / span 2}.mscorers{grid-column:2;grid-row:2;font-size:13px}}
+.mvpline{font-size:14px;margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mvpline .mvptag{font-size:10px;padding:1px 4px}
 .hint{font-size:13px;color:var(--muted)}
 .hint.warn{color:var(--loss)}
 .mfoot{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
