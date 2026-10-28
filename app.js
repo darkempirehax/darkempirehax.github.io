@@ -68,16 +68,16 @@ const pname = id => { const p=P(id); return p ? p.name : "(jugador borrado)"; };
 function fmtDate(d){ if(!d) return "Sin fecha"; const x=new Date(d+"T12:00:00"); if(isNaN(x)) return d;
   return x.toLocaleDateString("es-AR",{weekday:"short",day:"2-digit",month:"2-digit"}).replace(",",""); }
 function kb(n){ return n>=1024*1024 ? (n/1024/1024).toFixed(1)+" MB" : Math.round(n/1024)+" KB"; }
-function res(m){ if(m.status!=="jugado") return null; const a=+m.gf||0, b=+m.gc||0; return a>b?"G":a<b?"P":"E"; }
+function res(m){ if(m.status!=="jugado") return null; if(m.df) return "DF"; const a=+m.gf||0, b=+m.gc||0; return a>b?"G":a<b?"P":"E"; }
 const inLeague = m => ui.league==="all" || m.league===ui.league;
-function record(list){ const r={pj:0,g:0,e:0,p:0,gf:0,gc:0};
-  list.forEach(m => { const x=res(m); if(!x) return; r.pj++; r[x==="G"?"g":x==="E"?"e":"p"]++; r.gf+=+m.gf||0; r.gc+=+m.gc||0; }); return r; }
+function record(list){ const r={pj:0,g:0,e:0,p:0,df:0,gf:0,gc:0};
+  list.forEach(m => { const x=res(m); if(!x) return; if(x==="DF"){ r.df++; return; } r.pj++; r[x==="G"?"g":x==="E"?"e":"p"]++; r.gf+=+m.gf||0; r.gc+=+m.gc||0; }); return r; }
 const key = m => (m.date||"9999-99-99")+" "+(m.time||"99:99");
 const upcoming = list => list.filter(m => m.status!=="jugado").sort((a,b) => key(a)<key(b)?-1:1);
 const played = list => list.filter(m => m.status==="jugado").sort((a,b) => key(a)<key(b)?1:-1);
 function stats(list){
   const t={}; S.players.forEach(p => { t[p.id]={id:p.id,pj:0,g:0,a:0,mvp:0}; });
-  list.forEach(m => { if(m.status!=="jugado") return;
+  list.forEach(m => { if(m.status!=="jugado" || m.df) return;
     (m.lineup||[]).forEach(r => { const s=t[r.p]; if(!s) return; s.pj++; s.g+=+r.g||0; s.a+=+r.a||0; });
     if(m.mvp && t[m.mvp]) t[m.mvp].mvp++; });
   return t;
@@ -92,7 +92,7 @@ function render(){
     + '<img class="crest" src="escudo.png" alt="Escudo de '+esc(S.club.name)+'" width="281" height="416">'
     + '<div class="head"><h1 class="club">'+esc(S.club.name)+'</h1></div>'
     + '<div class="meta">'
-    + '<div class="record num">'+rec(r.pj,"PJ")+rec(r.g,"Ganados")+rec(r.e,"Empates")+rec(r.p,"Perdidos")+rec(r.gf+"–"+r.gc,"Goles")+'</div>'
+    + '<div class="record num">'+rec(r.pj,"PJ")+rec(r.g,"Ganados")+rec(r.e,"Empates")+rec(r.p,"Perdidos")+'</div>'
     + (nx ? '<div class="next">Próximo: <b>vs '+esc(nx.rival)+'</b> · '+(L(nx.league)?esc(L(nx.league).name):"")+' · '+esc(fmtDate(nx.date))+(nx.time?" "+esc(nx.time):"")+'</div>' : '')
     + (canWrite ? '<span class="role">Modo capitán</span>' : '')
     + '</div></div></header>';
@@ -111,7 +111,7 @@ function stateView(){
   else body = '<h2>Cargando…</h2><p class="hint">Trayendo el fixture y las estadísticas.</p>';
   return '<main class="gut" style="padding-block:40px"><div class="inner"><div class="state">'+body+'</div></div></main>';
 }
-const rec = (v,l) => '<div class="rec"><b>'+esc(v)+'</b><span>'+l+'</span></div>';
+const rec = (v,l,c) => '<div class="rec'+(c?' '+c:'')+'"><b>'+esc(v)+'</b><span>'+l+'</span></div>';
 function leagueChips(){
   if(!S.leagues.length) return "";
   return '<div class="chips" role="group" aria-label="Filtrar por liga">'
@@ -137,11 +137,13 @@ function matchRow(m){
   let h = '<article class="match"><button class="mrow" data-act="m-open" data-id="'+esc(m.id)+'" aria-expanded="'+open+'"'+(clickable?'':' disabled')+'>'
     + '<div class="mdate"><b>'+esc(fmtDate(m.date))+'</b><span>'+esc(m.time||"Sin hora")+'</span></div>'
     + '<div style="min-width:0"><div class="mmeta">'+lgBadge(m.league)+(m.round?' · '+esc(m.round):'')+(m.rec?' <span class="rectag" title="Tiene grabación">REC</span>':'')+'</div><div class="mrival">vs '+esc(m.rival)+'</div></div>'
-    + (r ? '<div class="score num '+r+'" aria-label="Resultado '+(+m.gf)+' a '+(+m.gc)+'">'+(+m.gf)+'–'+(+m.gc)+'</div>' : '<span class="pend">Pendiente</span>')
+    + (r==="DF" ? '<div class="score DF" aria-label="Ganado por DF, 3 a 0" title="El rival no se presentó (3–0)">DF</div>'
+      : r ? '<div class="score num '+r+'" aria-label="Resultado '+(+m.gf)+' a '+(+m.gc)+'">'+(+m.gf)+'–'+(+m.gc)+'</div>' : '<span class="pend">Pendiente</span>')
     + '</button>';
   if(open){
     h += '<div class="mdetail">';
-    if(r){
+    if(r==="DF"){ h += '<div>Ganado 3–0 por DF: el rival no se presentó.</div>'+(m.notes?'<div>'+esc(m.notes)+'</div>':''); }
+    else if(r){
       const list = f => (m.lineup||[]).filter(x => +x[f]>0).sort((a,b) => b[f]-a[f]).map(x => esc(pname(x.p))+(x[f]>1?" ×"+x[f]:"")).join(", ");
       const pj = (m.lineup||[]).map(x => esc(pname(x.p))).join(", ");
       h += '<dl><dt>Goles</dt><dd>'+(list("g")||"—")+'</dd><dt>Asistencias</dt><dd>'+(list("a")||"—")+'</dd><dt>Figura</dt><dd>'+(m.mvp?esc(pname(m.mvp)):"—")+'</dd><dt>Jugaron</dt><dd>'+(pj||"—")+'</dd>'+(m.notes?'<dt>Notas</dt><dd>'+esc(m.notes)+'</dd>':'')+'</dl>';
@@ -167,7 +169,7 @@ function vStats(){
   const cols=[["name","Jugador"],["pj","PJ"],["g","Goles"],["a","Asist."],["ga","G+A"],["mvp","Figura"]];
   h += '<div class="tablewrap"><table><thead><tr>'+cols.map(c => '<th scope="col"><button data-act="sort" data-id="'+c[0]+'" aria-pressed="'+(k===c[0])+'">'+c[1]+(k===c[0]&&c[0]!=="name"?" ▾":"")+'</button></th>').join("")+'<th scope="col">Prom. gol</th></tr></thead><tbody>'
     + rows.map(s => { const p=P(s.id), hl = c => k===c?' class="hl"':'';
-      return '<tr'+(p.active===false?' class="off"':'')+'><td>'+esc(p.name)+posList(p).map(k => '<span class="pos">'+esc(k)+'</span>').join("")+'</td><td>'+s.pj+'</td><td'+hl("g")+'>'+s.g+'</td><td'+hl("a")+'>'+s.a+'</td><td'+hl("ga")+'>'+(s.g+s.a)+'</td><td'+hl("mvp")+'>'+s.mvp+'</td><td>'+(s.pj?(s.g/s.pj).toFixed(2):"—")+'</td></tr>'; }).join("")
+      return '<tr'+(p.active===false?' class="off"':'')+'><td><button class="pname" data-act="p-view" data-id="'+esc(p.id)+'">'+esc(p.name)+'</button>'+posList(p).map(k => '<span class="pos">'+esc(k)+'</span>').join("")+'</td><td>'+s.pj+'</td><td'+hl("g")+'>'+s.g+'</td><td'+hl("a")+'>'+s.a+'</td><td'+hl("ga")+'>'+(s.g+s.a)+'</td><td'+hl("mvp")+'>'+s.mvp+'</td><td>'+(s.pj?(s.g/s.pj).toFixed(2):"—")+'</td></tr>'; }).join("")
     + '</tbody></table></div>';
   return h;
 }
@@ -180,7 +182,7 @@ function vPlayers(){
   function card(p){ const s=t[p.id]; const inner = '<h3><span class="shirt num">'+esc(p.num||"·")+'</span>'+esc(p.name)+'</h3>'
       + '<div class="sub">'+esc(posList(p).map(k => POS[k]).join(" · ")||"Sin posición")+(p.active===false?' · De baja':'')+'</div>'
       + '<div class="minis"><span><b>'+s.pj+'</b> PJ</span><span><b>'+s.g+'</b> goles</span><span><b>'+s.a+'</b> asist.</span></div>';
-    return canWrite ? '<button class="card" data-act="p-edit" data-id="'+esc(p.id)+'">'+inner+'</button>' : '<div class="card">'+inner+'</div>'; }
+    return '<button class="card" data-act="p-view" data-id="'+esc(p.id)+'">'+inner+'</button>'; }
   h += '<div class="grid">'+act.map(card).join("")+'</div>';
   if(off.length) h += '<section class="sec"><h2>De baja <small>'+off.length+'</small></h2><div class="grid off">'+off.map(card).join("")+'</div></section>';
   return h;
@@ -189,10 +191,10 @@ function vLeagues(){
   let h = '<div class="bar"><h2 style="font-size:22px;font-weight:600">Ligas</h2>'+(canWrite?'<div class="acts"><button class="btn ghost" data-act="club">Cambiar nombre del club</button><button class="btn" data-act="l-new">+ Liga</button></div>':'')+'</div>';
   if(!S.leagues.length) return h + '<div class="empty">'+(canWrite?'Creá la primera liga para empezar a cargar el fixture.':'Todavía no hay ligas cargadas.')+'</div>';
   h += '<div class="grid">'+S.leagues.map(l => {
-    const ms = S.matches.filter(m => m.league===l.id), r = record(ms), pend = ms.length - r.pj;
+    const ms = S.matches.filter(m => m.league===l.id), r = record(ms), pend = ms.filter(m => m.status!=="jugado").length;
     const inner = '<h3><span class="dot" style="--lg:'+esc(l.color)+';width:12px;height:12px"></span>'+esc(l.name)+'</h3>'
       + '<div class="sub">'+(l.note?esc(l.note)+' · ':'')+pend+' pendiente'+(pend===1?'':'s')+'</div>'
-      + '<div class="minis num"><span><b>'+r.pj+'</b> PJ</span><span><b>'+r.g+'-'+r.e+'-'+r.p+'</b> G-E-P</span><span><b>'+r.gf+':'+r.gc+'</b></span></div>';
+      + '<div class="minis num"><span><b>'+r.pj+'</b> PJ</span><span><b>'+r.g+'-'+r.e+'-'+r.p+'</b> G-E-P</span>'+(r.df?'<span><b>'+r.df+'</b> DF</span>':'')+'</div>';
     return canWrite ? '<button class="card" data-act="l-edit" data-id="'+esc(l.id)+'">'+inner+'</button>' : '<div class="card">'+inner+'</div>';
   }).join("")+'</div>';
   return h;
@@ -222,13 +224,14 @@ function matchForm(m){
     + '</div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="st" id="st-p" value="pendiente"'+(m.status!=="jugado"?' checked':'')+'>Pendiente</label><label><input type="radio" name="st" id="st-j" value="jugado"'+(m.status==="jugado"?' checked':'')+'>Jugado</label></div>'
     + '<div id="resblock"'+(m.status==="jugado"?'':' hidden')+' style="display:grid;gap:12px">'
+    + '<label class="dftoggle"><input type="checkbox" id="f-df"'+(m.df?' checked':'')+'><span><b>DF</b> · El rival no se presentó (3–0)</span></label>'
     + '<div class="scorein"><label class="f" style="text-align:center"><span>Nosotros</span><input type="number" min="0" max="99" id="f-gf" value="'+(m.gf!=null?+m.gf:"")+'"></label><b style="font:700 28px var(--f-display)">–</b><label class="f" style="text-align:center"><span>Rival</span><input type="number" min="0" max="99" id="f-gc" value="'+(m.gc!=null?+m.gc:"")+'"></label></div>'
-    + (roster.length ? '<div class="tablewrap"><table class="lineup"><thead><tr><th>Jugador</th><th>Jugó</th><th>Goles</th><th>Asist.</th><th>Figura</th></tr></thead><tbody>'
+    + '<div id="lineupblock" style="display:grid;gap:12px">'+(roster.length ? '<div class="tablewrap"><table class="lineup"><thead><tr><th>Jugador</th><th>Jugó</th><th>Goles</th><th>Asist.</th><th>Figura</th></tr></thead><tbody>'
       + roster.map(p => { const r=lu[p.id], id=esc(p.id), n=esc(p.name); return '<tr data-p="'+id+'"><td>'+n+'</td><td><input type="checkbox" id="pl-'+id+'" aria-label="Jugó '+n+'"'+(r?' checked':'')+'></td>'
         + '<td><input type="number" min="0" max="99" id="g-'+id+'" aria-label="Goles de '+n+'" value="'+(r&&+r.g?+r.g:"")+'" placeholder="0"></td>'
         + '<td><input type="number" min="0" max="99" id="a-'+id+'" aria-label="Asistencias de '+n+'" value="'+(r&&+r.a?+r.a:"")+'" placeholder="0"></td>'
         + '<td><input type="radio" name="mvp" id="mvp-'+id+'" value="'+id+'" aria-label="Figura: '+n+'"'+(m.mvp===p.id?' checked':'')+'></td></tr>'; }).join("")
-      + '</tbody></table></div><div class="hint" id="tally"></div>' : '<div class="hint">Agregá jugadores en Plantel para cargarles goles y asistencias.</div>')
+      + '</tbody></table></div><div class="hint" id="tally"></div>' : '<div class="hint">Agregá jugadores en Plantel para cargarles goles y asistencias.</div>')+'</div>'
     + '</div>'
     + '<div class="filein"><span>Grabación del partido (.hbr2)</span>'
     + (m.rec ? '<div class="recbox" id="recnow"><span style="color:var(--ink);font-weight:500">'+esc(m.rec.name)+' · '+kb(m.rec.size||0)+'</span><button type="button" class="btn ghost small" data-act="rec-rm">Quitar</button></div>' : '')
@@ -242,8 +245,12 @@ function matchForm(m){
     const gf=+$("f-gf").value||0;
     el.textContent = "Goles asignados: "+g+" de "+gf+" · Asistencias: "+a+(g>gf?" · Hay más goles asignados que goles del equipo.":"");
     el.className = "hint"+(g>gf?" warn":""); }
+  function syncDf(){ const on=$("f-df").checked; $("lineupblock").hidden=on; $("f-gf").disabled=on; $("f-gc").disabled=on;
+    if(on){ $("f-gf").value=3; $("f-gc").value=0; } }
+  syncDf();
   form.addEventListener("change", e => {
     if(e.target.name==="st") $("resblock").hidden = e.target.value!=="jugado";
+    if(e.target.id==="f-df"){ if(!e.target.checked){ $("f-gf").value=""; $("f-gc").value=""; } syncDf(); }
     if(e.target.id==="f-rec"){ const f=e.target.files[0], hint=$("rechint");
       if(f && f.size>MAX_REC){ hint.textContent="Ese archivo pesa "+kb(f.size)+"; el máximo es 900 KB."; hint.className="hint warn"; e.target.value=""; }
       else if(f){ hint.textContent="Se va a subir "+f.name+" ("+kb(f.size)+") al guardar."; hint.className="hint"; } }
@@ -263,7 +270,9 @@ function matchForm(m){
     const nm = {id:m.id, league:$("f-league").value, round:$("f-round").value.trim(), rival:$("f-rival").value.trim(),
       date:$("f-date").value, time:$("f-time").value, notes:$("f-notes").value.trim(), status:st, rec: removeRec ? null : (m.rec||null)};
     if(!nm.rival){ $("f-rival").focus(); return; }
-    if(st==="jugado"){
+    nm.df = st==="jugado" && $("f-df").checked;
+    if(nm.df){ nm.gf = 3; nm.gc = 0; nm.lineup = []; nm.mvp = null; }
+    else if(st==="jugado"){
       nm.gf = Math.max(0, +$("f-gf").value||0); nm.gc = Math.max(0, +$("f-gc").value||0);
       nm.lineup = []; form.querySelectorAll("tr[data-p]").forEach(tr => { const id=tr.dataset.p;
         const g=Math.max(0,+$("g-"+id).value||0), a=Math.max(0,+$("a-"+id).value||0);
@@ -283,10 +292,29 @@ function matchForm(m){
       busy = false;
     }
     const ok = await commit(n => { const i=n.matches.findIndex(x => x.id===nm.id); if(i<0) n.matches.push(nm); else n.matches[i]=nm; },
-      isNew ? "Partido agregado al fixture" : (st==="jugado" ? "Resultado guardado" : "Partido actualizado"));
+      isNew ? "Partido agregado al fixture" : (nm.df ? "Guardado como DF (3–0)" : st==="jugado" ? "Resultado guardado" : "Partido actualizado"));
     if(ok && oldRec && (!nm.rec || nm.rec.id!==oldRec.id)) deleteDoc(doc(db,"grabaciones",oldRec.id)).catch(()=>{});
     if(!ok && file && nm.rec) deleteDoc(doc(db,"grabaciones",nm.rec.id)).catch(()=>{});
   });
+}
+function playerView(p){
+  const ms = played(S.matches).filter(m => !m.df && (m.lineup||[]).some(r => r.p===p.id));
+  let g=0,a=0,f=0;
+  const rows = ms.map(m => { const r=(m.lineup||[]).find(x => x.p===p.id), x=res(m); g+=+r.g||0; a+=+r.a||0; if(m.mvp===p.id) f++;
+    const bits = [];
+    if(+r.g) bits.push('<b>'+(+r.g)+'</b> '+(+r.g===1?'gol':'goles'));
+    if(+r.a) bits.push('<b>'+(+r.a)+'</b> '+(+r.a===1?'asist.':'asist.'));
+    if(m.mvp===p.id) bits.push('<span class="mvptag">Figura</span>');
+    return '<li class="pm'+(bits.length?' hit':'')+'"><div class="mdate"><b>'+esc(fmtDate(m.date))+'</b></div>'
+      + '<div style="min-width:0"><div class="mmeta">'+lgBadge(m.league)+(m.round?' · '+esc(m.round):'')+'</div><div class="mrival">vs '+esc(m.rival)+'</div>'
+      + '<div class="contrib">'+(bits.join(' · ')||'<span class="hint">Sin goles ni asistencias</span>')+'</div></div>'
+      + '<div class="score small num '+x+'">'+(+m.gf)+'–'+(+m.gc)+'</div></li>'; }).join("");
+  const pos = posList(p).map(k => POS[k]).join(" · ");
+  openModal('<div class="pview"><h2 style="display:flex;align-items:center;gap:10px"><span class="shirt num">'+esc(p.num||"·")+'</span>'+esc(p.name)+'</h2>'
+    + '<div class="hint">'+esc(pos||"Sin posición")+(p.active===false?' · De baja':'')+'</div>'
+    + '<div class="record num">'+rec(ms.length,"PJ")+rec(g,"Goles")+rec(a,"Asist.")+rec(f,"Figura")+'</div>'
+    + (ms.length ? '<h3 class="pvh">Partidos jugados</h3><ul class="plist">'+rows+'</ul>' : '<div class="empty">Todavía no tiene partidos cargados.</div>')
+    + '<div class="mfoot">'+(canWrite?'<button type="button" class="btn ghost" data-act="p-edit" data-id="'+esc(p.id)+'" style="margin-right:auto">Editar jugador</button>':'')+'<button type="button" class="btn" data-act="close">Cerrar</button></div></div>');
 }
 function playersNewForm(){
   openModal('<form id="pf"><h2>Agregar jugadores</h2><label class="f">Un nick por línea<textarea id="f-names" placeholder="Pepe&#10;ElTanque&#10;Zurdo10"></textarea></label><div class="hint">Después podés tocar cada jugador para ponerle posición y número.</div>'+foot("")+'</form>');
@@ -385,6 +413,7 @@ document.addEventListener("click", e => {
   if(a==="sort"){ ui.sort=id; saveUi(); render(); return; }
   if(a==="m-open"){ ui.open = ui.open===id ? null : id; render(); return; }
   if(a==="rec-dl"){ const m = S.matches.find(x => x.id===id); if(m && m.rec) downloadRec(m); return; }
+  if(a==="p-view"){ const p=P(id); if(p) playerView(p); return; }
   if(a==="login"){ login(); return; }
   if(a==="logout"){ signOut(auth); return; }
   if(!canWrite) return;
