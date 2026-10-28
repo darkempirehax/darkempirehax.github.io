@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// Reglas de seguridad del club.
+// - Cualquiera puede LEER los datos del club y las grabaciones (sin cuenta).
+// - Solo los capitanes pueden ESCRIBIR. Un capitán es una cuenta de Google
+//   cuyo mail figura como documento en la colección "capitanes".
+// - La lista de capitanes no la puede leer nadie desde la página
+//   (cada capitán solo puede comprobar si él mismo está en la lista).
+//   Se administra a mano desde la consola de Firebase.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isCaptain() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/capitanes/$(request.auth.token.email));
+    }
+
+    // Fixture, resultados, plantel, ligas y estadísticas (un solo documento).
+    match /club/{docId} {
+      allow read: if true;
+      allow write: if isCaptain();
+    }
+
+    // Grabaciones .hbr2 (un documento por archivo, hasta ~1 MB).
+    match /grabaciones/{recId} {
+      allow read: if true;
+      allow create, update: if isCaptain()
+        && request.resource.data.data is bytes
+        && request.resource.data.data.size() <= 950000;
+      allow delete: if isCaptain();
+    }
+
+    // Lista de capitanes: privada.
+    match /capitanes/{email} {
+      allow read: if request.auth != null && request.auth.token.email == email;
+      allow write: if false;
+    }
+
+    // Cualquier otra cosa: cerrada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
