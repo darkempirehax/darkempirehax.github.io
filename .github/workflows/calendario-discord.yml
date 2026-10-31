@@ -1,0 +1,23 @@
+name: Calendario en Discord
+
+on:
+  schedule:
+    # Todos los días a las 00:05 de Argentina (03:05 UTC): el mensaje pasa a empezar en el día nuevo.
+    - cron: "5 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Actualizar mensaje del calendario
+        run: node scripts/calendario-discord.mjs
+        env:
+          DISCORD_WEBHOOK_CALENDARIO: ${{ secrets.DISCORD_WEBHOOK_CALENDARIO }}
