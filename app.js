@@ -3,6 +3,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { renderCalendario, webhookValido } from "./scripts/calendario-render.js";
 
 "use strict";
 const COLORS = ["#3a6fd8","#5aa9f0","#22b8cf","#1f9a8a","#2fbf71","#5f7f2e","#a3c94a","#e8c23a","#c48a12","#d0712b","#d4513f","#b3263e","#e04f86","#c2508f","#7b5cd6","#a77ef0","#8d6e63","#9ea7b3","#f1f0ec"];
@@ -20,6 +21,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
+const disc = {hook:"", msgId:"", last:"", loaded:false};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.league = sv.league || "all"; ui.sort = sv.sort || "g"; } }catch(e){}
 function saveUi(){ try{ localStorage.setItem("hx_ui", JSON.stringify({league:ui.league, sort:ui.sort})); }catch(e){} }
@@ -46,6 +48,7 @@ if(!cfg.apiKey || !cfg.projectId){
       if(!canWrite){ toast("Esta cuenta de Google no está habilitada como capitán."); signOut(auth); }
     }
     render();
+    if(canWrite) loadDiscord();
   });
 }
 function normalize(d){ d = d || {}; return {club: d.club || {name:"Dark Empire"}, leagues: d.leagues || [], players: d.players || [], matches: d.matches || []}; }
@@ -245,7 +248,7 @@ function vPlayers(){
 }
 function vLeagues(){
   let h = '<div class="bar"><h2 style="font-size:22px;font-weight:600">Ligas</h2>'+(canWrite?'<div class="acts"><button class="btn ghost" data-act="club">Cambiar nombre del club</button><button class="btn" data-act="l-new">+ Liga</button></div>':'')+'</div>';
-  if(!S.leagues.length) return h + '<div class="empty">'+(canWrite?'Creá la primera liga para empezar a cargar el fixture.':'Todavía no hay ligas cargadas.')+'</div>';
+  if(!S.leagues.length) return h + '<div class="empty">'+(canWrite?'Creá la primera liga para empezar a cargar el fixture.':'Todavía no hay ligas cargadas.')+'</div>' + discordSection();
   h += '<div class="grid">'+S.leagues.map(l => {
     const ms = S.matches.filter(m => m.league===l.id), r = record(ms), pend = ms.filter(m => m.status!=="jugado").length;
     const inner = '<h3><span class="dot" style="--lg:'+esc(l.color)+';width:12px;height:12px"></span>'+esc(l.name)+'</h3>'
@@ -254,7 +257,79 @@ function vLeagues(){
     const acts = tablaBtn(l) + (canWrite ? '<button class="btn ghost small" data-act="l-edit" data-id="'+esc(l.id)+'">Editar</button>' : '');
     return '<div class="card">'+inner+(acts?'<div class="acts">'+acts+'</div>':'')+'</div>';
   }).join("")+'</div>';
-  return h;
+  return h + discordSection();
+}
+
+/* ---------- Discord: mensaje del calendario ---------- */
+function discordSection(){
+  if(!canWrite) return "";
+  const ok = !!disc.hook;
+  return '<section class="sec"><h2>Discord <small>solo capitanes</small></h2><div class="card">'
+    + '<div class="sub">Mensaje "Calendario de partidos oficiales" en tu canal de Discord. Se actualiza solo cada vez que un capitán guarda un cambio.</div>'
+    + (!disc.loaded ? '<div class="hint">Cargando configuración…</div>'
+      : ok ? '<div class="hint">Webhook configurado · '+(disc.msgId ? 'mensaje publicado' : 'mensaje todavía sin publicar')+(disc.last ? ' · última actualización '+esc(disc.last) : '')+'</div>'
+      : '<div class="hint warn">Falta configurar el webhook del canal del calendario.</div>')
+    + '<div class="acts"><button class="btn small" data-act="dc-config">'+(ok ? 'Cambiar webhook' : 'Configurar webhook')+'</button>'
+    + '<button class="btn ghost small" data-act="dc-preview">Ver mensaje</button>'
+    + (ok ? '<button class="btn ghost small" data-act="dc-sync">Actualizar ahora</button>' : '')
+    + (ok && disc.msgId ? '<button class="btn ghost small" data-act="dc-new">Publicar de nuevo</button>' : '')
+    + '</div></div></section>';
+}
+async function loadDiscord(){
+  try{
+    const [p, c] = await Promise.all([getDoc(doc(db,"privado","discord")), getDoc(doc(db,"club","discord"))]);
+    disc.hook = p.exists() ? (p.data().calWebhook || "") : "";
+    disc.msgId = c.exists() ? (c.data().calMsgId || "") : "";
+  }catch(e){ console.error(e); }
+  disc.loaded = true;
+  if(ui.tab==="ligas") render();
+  if(disc.hook && disc.msgId) syncDiscord(false, false);
+}
+let dcTimer = null, dcBusy = false;
+function scheduleDiscord(){ if(!canWrite || !disc.hook) return; clearTimeout(dcTimer); dcTimer = setTimeout(() => syncDiscord(false, false), 1500); }
+async function syncDiscord(forceNew, loud){
+  if(!canWrite || !disc.hook || !S) return;
+  if(dcBusy){ scheduleDiscord(); return; }
+  dcBusy = true;
+  const content = renderCalendario(S, todayStr());
+  const body = JSON.stringify({content, allowed_mentions:{parse:[]}});
+  try{
+    let edited = false;
+    if(disc.msgId && !forceNew){
+      const r = await fetch(disc.hook+"/messages/"+disc.msgId, {method:"PATCH", headers:{"Content-Type":"application/json"}, body});
+      if(r.ok) edited = true; else if(r.status!==404) throw new Error("Discord "+r.status);
+    }
+    if(!edited){
+      const r = await fetch(disc.hook+"?wait=true", {method:"POST", headers:{"Content-Type":"application/json"}, body});
+      if(!r.ok) throw new Error("Discord "+r.status);
+      const j = await r.json(); disc.msgId = String(j.id);
+      await setDoc(doc(db,"club","discord"), {calMsgId: disc.msgId});
+    }
+    disc.last = new Date().toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+    if(loud) toast(edited ? "Mensaje de Discord actualizado" : "Mensaje publicado en Discord");
+  }catch(e){ console.error(e); toast("No se pudo actualizar el mensaje de Discord. Revisá el webhook en Ligas → Discord."); }
+  dcBusy = false;
+  if(ui.tab==="ligas") render();
+}
+function discordConfigForm(){
+  openModal('<form id="dcf"><h2>Webhook del calendario</h2>'
+    + '<label class="f">Dirección del webhook<input type="text" id="f-dchook" autocomplete="off" placeholder="https://discord.com/api/webhooks/..." value="'+esc(disc.hook)+'"></label>'
+    + '<div class="hint" id="dchint">En Discord: Editar canal → Integraciones → Webhooks → Nuevo webhook → Copiar URL. Usá el canal donde va el calendario. Solo los capitanes pueden ver esta dirección.</div>'
+    + foot("")+'</form>');
+  document.getElementById("dcf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
+    const url = document.getElementById("f-dchook").value.trim(), hint = document.getElementById("dchint");
+    if(!webhookValido(url)){ hint.textContent = "Esa dirección no es un webhook de Discord. Tiene que empezar con https://discord.com/api/webhooks/"; hint.className = "hint warn"; return; }
+    busy = true; setSaving(true);
+    try{ await setDoc(doc(db,"privado","discord"), {calWebhook: url}); }
+    catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar el webhook.")); return; }
+    busy = false; const changed = url !== disc.hook; disc.hook = url; closeModal(); toast("Webhook guardado");
+    syncDiscord(changed || !disc.msgId, true);
+  });
+}
+function discordPreview(){
+  const txt = renderCalendario(S, todayStr());
+  openModal('<div class="pview"><h2>Mensaje de Discord</h2><div class="hint">Así se ve el texto que se manda (Discord le aplica el formato).</div><pre class="dcpre" id="dcpre">'+esc(txt)+'</pre>'
+    + '<div class="mfoot"><button type="button" class="btn ghost" data-act="dc-copy" style="margin-right:auto">Copiar texto</button><button type="button" class="btn" data-act="close">Cerrar</button></div></div>');
 }
 
 /* ---------- modales ---------- */
@@ -279,6 +354,7 @@ function matchForm(m){
     + '<label class="f">Día<input type="date" id="f-date" value="'+esc(m.date||"")+'"></label>'
     + '<label class="f">Hora<input type="time" id="f-time" value="'+esc(m.time||"")+'"></label>'
     + '</div>'
+    + '<div class="hint">¿Se reprogramó y todavía no tiene día? Dejá <b>Día</b> vacío: en Discord va a figurar en PENDIENTES.</div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="st" id="st-p" value="pendiente"'+(m.status!=="jugado"?' checked':'')+'>Pendiente</label><label><input type="radio" name="st" id="st-j" value="jugado"'+(m.status==="jugado"?' checked':'')+'>Jugado</label></div>'
     + '<div id="resblock"'+(m.status==="jugado"?'':' hidden')+' style="display:grid;gap:12px">'
     + '<label class="dftoggle"><input type="checkbox" id="f-df"'+(m.df?' checked':'')+'><span><b>DF</b> · El rival no se presentó (3–0)</span></label>'
@@ -403,7 +479,8 @@ function leagueForm(l){
   const used = S.matches.filter(m => m.league===l.id).length;
   openModal('<form id="lf"><h2>'+(isNew?'Nueva liga':esc(l.name))+'</h2><div class="fields">'
     + '<label class="f">Nombre<input type="text" id="f-lname" required maxlength="40" value="'+esc(l.name)+'" placeholder="Liga Argentina de Haxball"></label>'
-    + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label></div>'
+    + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label>'
+    + '<label class="f">Nombre corto (Discord)<input type="text" id="f-lshort" maxlength="20" value="'+esc(l.short||"")+'" placeholder="Ej: RF"></label></div>'
     + '<label class="f">Link de la tabla de posiciones<input type="text" id="f-llink" autocomplete="off" maxlength="300" inputmode="url" value="'+esc(l.link||"")+'" placeholder="https://challenge.place/c/..."><span class="hint" id="llhint">Opcional. Pegá el link de la liga en challenge.place (o donde publiquen la tabla).</span></label>'
     + '<div class="filein"><span>Color</span><div class="swatches" role="radiogroup" aria-label="Color">'+COLORS.map((c,i) => '<label class="swatch" style="--sw:'+c+'" title="'+c+'"><input type="radio" name="lc" id="lc-'+i+'" value="'+c+'"'+(c===l.color?' checked':'')+' aria-label="Color '+(i+1)+'"></label>').join("")
     + '<label class="swatch custom" title="Elegir otro color"><input type="radio" name="lc" id="lc-x" value="custom"'+(COLORS.includes(l.color)?'':' checked')+' aria-label="Otro color"><input type="color" id="f-lcolor" value="'+(COLORS.includes(l.color)||!/^#[0-9a-f]{6}$/i.test(l.color||"")?'#888888':esc(l.color))+'" aria-label="Elegir otro color"><span>Otro</span></label></div></div>'
@@ -415,7 +492,7 @@ function leagueForm(l){
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-lname").value.trim(); if(!nm) return;
     const c=form.querySelector('input[name="lc"]:checked'); const pick = c && c.value==="custom" ? document.getElementById("f-lcolor").value : (c ? c.value : l.color); const color = /^#[0-9a-f]{6}$/i.test(pick) ? pick : l.color; let rawLink=document.getElementById("f-llink").value.trim(); if(rawLink && !/^[a-z]+:/i.test(rawLink)) rawLink="https://"+rawLink; const link=rawLink?safeUrl(rawLink):"";
     if(rawLink && !link){ const hh=document.getElementById("llhint"); hh.textContent="Ese link no es válido: tiene que empezar con https://"; hh.className="hint warn"; document.getElementById("f-llink").focus(); return; }
-    const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),color,link};
+    const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),short:document.getElementById("f-lshort").value.trim(),color,link};
     commit(n => { const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
 }
 function clubForm(){
@@ -456,7 +533,7 @@ async function commit(mut, msg){
       mut(next);
       tx.set(mainRef, JSON.parse(JSON.stringify(next)));
     });
-    busy = false; closeModal(); toast(msg); return true;
+    busy = false; closeModal(); toast(msg); scheduleDiscord(); return true;
   }catch(err){
     console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar. Probá de nuevo.")); return false;
   }
@@ -488,6 +565,11 @@ document.addEventListener("click", e => {
   if(a==="l-new") leagueForm(null);
   if(a==="l-edit") leagueForm(L(id));
   if(a==="club") clubForm();
+  if(a==="dc-config") discordConfigForm();
+  if(a==="dc-preview") discordPreview();
+  if(a==="dc-sync") syncDiscord(false, true);
+  if(a==="dc-new") syncDiscord(true, true);
+  if(a==="dc-copy"){ const t=document.getElementById("dcpre").textContent; navigator.clipboard.writeText(t).then(() => toast("Texto copiado"), () => { const r=document.createRange(); r.selectNodeContents(document.getElementById("dcpre")); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast("Seleccioné el texto: copialo con Ctrl+C"); }); }
 });
 document.addEventListener("keydown", e => { if(e.key==="Escape" && modalHost.innerHTML && !busy) closeModal(); });
 addEventListener("hashchange", () => { fromHash(); ui.open=null; render(); scrollTo(0,0); });
