@@ -358,6 +358,11 @@ function matchForm(m){
     + '</div>'
     + '<div class="hint">¿Se reprogramó y todavía no tiene día? Dejá <b>Día</b> vacío: en Discord va a figurar en PENDIENTES.</div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="st" id="st-p" value="pendiente"'+(m.status!=="jugado"?' checked':'')+'>Pendiente</label><label><input type="radio" name="st" id="st-j" value="jugado"'+(m.status==="jugado"?' checked':'')+'>Jugado</label></div>'
+    + '<div class="filein"><span>Grabación del partido (.hbr2)</span>'
+    + (m.rec ? '<div class="recbox" id="recnow"><span style="color:var(--ink);font-weight:500">'+esc(m.rec.name)+' · '+kb(m.rec.size||0)+'</span><button type="button" class="btn ghost small" data-act="rec-rm">Quitar</button></div>' : '')
+    + '<input type="file" id="f-rec" accept=".hbr2,.hbr,.hbrp"><span class="hint" id="rechint">'+(m.rec?'Elegí otro archivo para reemplazarla.':'Opcional. Hasta 900 KB. Al elegirla, la página lee goles y asistencias sola.')+'</span>'
+    + (m.rec ? '<div class="acts"><button type="button" class="btn ghost small" id="an-saved">Analizar la grabación guardada</button></div>' : '')
+    + '<div id="anout"></div></div>'
     + '<div id="resblock"'+(m.status==="jugado"?'':' hidden')+' style="display:grid;gap:12px">'
     + '<label class="dftoggle"><input type="checkbox" id="f-df"'+(m.df?' checked':'')+'><span><b>DF</b> · El rival no se presentó (3–0)</span></label>'
     + '<div class="scorein"><label class="f" style="text-align:center"><span>Nosotros</span><input type="number" min="0" max="99" id="f-gf" value="'+(m.gf!=null?+m.gf:"")+'"></label><b style="font:700 28px var(--f-display)">–</b><label class="f" style="text-align:center"><span>Rival</span><input type="number" min="0" max="99" id="f-gc" value="'+(m.gc!=null?+m.gc:"")+'"></label></div>'
@@ -368,11 +373,6 @@ function matchForm(m){
         + '<td><input type="radio" name="mvp" id="mvp-'+id+'" value="'+id+'" aria-label="Figura: '+n+'"'+(m.mvp===p.id?' checked':'')+'></td></tr>'; }).join("")
       + '</tbody></table></div><div class="hint" id="tally"></div>' : '<div class="hint">Agregá jugadores en Plantel para cargarles goles y asistencias.</div>')+'</div>'
     + '</div>'
-    + '<div class="filein"><span>Grabación del partido (.hbr2)</span>'
-    + (m.rec ? '<div class="recbox" id="recnow"><span style="color:var(--ink);font-weight:500">'+esc(m.rec.name)+' · '+kb(m.rec.size||0)+'</span><button type="button" class="btn ghost small" data-act="rec-rm">Quitar</button></div>' : '')
-    + '<input type="file" id="f-rec" accept=".hbr2,.hbr,.hbrp"><span class="hint" id="rechint">'+(m.rec?'Elegí otro archivo para reemplazarla.':'Opcional. Hasta 900 KB. Al elegirla, la página lee goles y asistencias sola.')+'</span>'
-    + (m.rec ? '<div class="acts"><button type="button" class="btn ghost small" id="an-saved">Analizar la grabación guardada</button></div>' : '')
-    + '<div id="anout"></div></div>'
     + '<label class="f">Notas<input type="text" id="f-notes" maxlength="200" placeholder="Opcional: sala, árbitro, link del video…" value="'+esc(m.notes||"")+'"></label>'
     + foot(isNew ? "" : "¿Borrar este partido, sus estadísticas y su grabación?") + '</form>';
   openModal(h);
