@@ -3,8 +3,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { renderCalendario, webhookValido } from "./scripts/calendario-render.js";
-import { analyzeReplay, matchNick } from "./analizador.js";
+import { renderCalendario, webhookValido } from "./scripts/calendario-render.js?v=20261104";
+import { analyzeReplay, matchNick } from "./analizador.js?v=20261104";
 
 "use strict";
 const COLORS = ["#3a6fd8","#5aa9f0","#22b8cf","#1f9a8a","#2fbf71","#5f7f2e","#a3c94a","#e8c23a","#c48a12","#d0712b","#d4513f","#b3263e","#e04f86","#c2508f","#7b5cd6","#a77ef0","#8d6e63","#9ea7b3","#f1f0ec"];
@@ -451,7 +451,7 @@ function matchForm(m){
   function renderAnalysis(){
     const T = totals();
     const opts = sel => '<option value="">¿Quién es?</option>'+roster.map(p => '<option value="'+esc(p.id)+'"'+(sel===p.id?' selected':'')+'>'+esc(p.name)+'</option>').join("")+'<option value="__none"'+(sel==="__none"?' selected':'')+'>No es del club</option>';
-    let h = '<div class="anbox"><b>Grabación analizada</b>';
+    let h = '<div class="anbox"><b>Grabación analizada</b>' + (an.existing ? '<div id="andiff-slot"></div>' : '');
     h += '<div class="anparts">'+an.games.map((g,i) => '<div class="anpart'+(an.inc[i]?'':' off')+'">'
         + '<label class="anchk"><input type="checkbox" class="an-inc" data-i="'+i+'"'+(an.inc[i]?' checked':'')+'> '+(an.games.length>1 ? (i+1)+'º tramo' : 'Partido')+' · '+fmtT(g.ticks/60)+'</label>'
         + '<span class="anscore"><span class="anteam red">Rojo '+g.red+'</span> – <span class="anteam blue">'+g.blue+' Azul</span></span>'
@@ -469,10 +469,12 @@ function matchForm(m){
     const warnMissing = missing ? '<span class="hint warn">Faltan '+missing+' nick'+(missing>1?'s':'')+' por asignar. Si no los asignás, sus goles no se suman.</span>' : '';
     if(an.existing){
       an.changes = buildChanges(T);
-      h += '<div class="andiff"><b>Este partido ya tenía datos cargados.</b> '
+      let d = '<div class="andiff"><b>Este partido ya tenía datos cargados.</b> '
         + (an.changes.length ? 'Encontré <b>'+an.changes.length+'</b> diferencia'+(an.changes.length>1?'s':'')+'. Marcá las que querés aceptar:' : 'Lo que dice la grabación coincide con lo cargado: no hay cambios.')
         + (an.changes.length ? '<ul class="anchanges">'+an.changes.map((c,i) => '<li><label><input type="checkbox" class="an-chg" data-i="'+i+'"'+(c.on?' checked':'')+'> '+c.label+'</label></li>').join("")+'</ul>' : '')
-        + '<div class="acts">'+(an.changes.length ? '<button type="button" class="btn small" id="an-accept">Aceptar los marcados</button><button type="button" class="btn ghost small" id="an-reject">Rechazar todos</button>' : '')+warnMissing+'</div></div>';
+        + '<div class="acts">'+(an.changes.length ? '<button type="button" class="btn small" id="an-accept">Aceptar los marcados</button><button type="button" class="btn ghost small" id="an-reject">Rechazar todos</button>' : '')+warnMissing+'</div>'
+        + '<div class="hint">Si algún nick está mal asignado, corregilo en la tabla de abajo y la lista se actualiza.</div></div>';
+      h = h.replace('<div id="andiff-slot"></div>', d);
     } else {
       h += '<div class="acts"><button type="button" class="btn small" id="an-apply">Cargar resultado y estadísticas ('+T.gf+'–'+T.gc+')</button>'+warnMissing+'</div>';
     }
