@@ -4,6 +4,7 @@
 // quién PATEA la pelota. En cada gol: el último en patear es el goleador, y el pateador
 // anterior (otro jugador) da la asistencia si es del mismo equipo. Si el último en patear
 // es del equipo que recibe el gol, es gol en contra. (Mismo criterio que Haxanalyzer.)
+// Los pases cuentan también los controles con el cuerpo (ver passTouch).
 // Cada vez que se reinicia el juego (por ejemplo, entre el 1º y el 2º tiempo) empieza un tramo nuevo.
 
 const LIBS = [
@@ -37,14 +38,16 @@ export function loadHaxball() {
  *   red, blue: goles de cada equipo
  *   goals: [{team, scorer, assist, own, time}]  (scorer/assist/own = {id, name, team} o null)
  *   players: {id: {id, name, ticks: {1: n, 2: n}}}  (tiempo en cancha por equipo)
+ *   passes: {nick: {done, tried}}  (pases acertados e intentados; los intentos solo se usan para el %)
  *   ticks: duración en ticks (60 por segundo)
  */
 export async function analyzeReplay(bytes, { onProgress } = {}) {
   const API = await loadHaxball();
   return new Promise((resolve, reject) => {
     let reader, g = null, touches = [], tick = 0, done = false;
+    let lastKick = null; // para pases: última patada pendiente {name, team, game, tick}
     const games = [];
-    const newGame = () => { g = { goals: [], players: {}, ticks: 0, red: 0, blue: 0 }; games.push(g); touches = []; };
+    const newGame = () => { g = { goals: [], players: {}, passes: {}, ticks: 0, red: 0, blue: 0 }; games.push(g); touches = []; };
     const info = id => { const p = reader.state.getPlayer(id); return p ? { id, name: p.name, team: (p.team && p.team.id) || 0 } : null; };
     function touch(id) {
       const p = info(id); if (!p || !p.team) return;
@@ -52,6 +55,19 @@ export async function analyzeReplay(bytes, { onProgress } = {}) {
       if (last && last.id === id && last.team === p.team) { last.tick = tick; return; }
       touches.push({ ...p, tick });
       if (touches.length > 10) touches.shift();
+    }
+    // Pases: después de una patada, el siguiente jugador que toca la pelota (pateando o con el cuerpo)
+    // decide el pase. Compañero = pase acertado; rival = pase errado. Si la vuelve a tocar el mismo
+    // jugador, no cuenta como intento. Un tiro que termina en gol tampoco.
+    function passTouch(p, isKick) {
+      if (!lastKick) return;
+      if (p.name === lastKick.name) {
+        if (!isKick && tick - lastKick.tick > 4) lastKick = null; // se la quedó él mismo
+        return;
+      }
+      const s = lastKick.game.passes[lastKick.name] || (lastKick.game.passes[lastKick.name] = { done: 0, tried: 0 });
+      s.tried++; if (p.team === lastKick.team) s.done++;
+      lastKick = null;
     }
     function finish() {
       if (done) return; done = true;
@@ -61,8 +77,18 @@ export async function analyzeReplay(bytes, { onProgress } = {}) {
     try {
       reader = API.Replay.read(bytes, {
         onGameStart: () => newGame(),
-        onPositionsReset: () => { touches = []; },
-        onPlayerBallKick: id => { if (!g) newGame(); touch(id); },
+        onPositionsReset: () => { touches = []; lastKick = null; },
+        onCollisionDiscVsDisc: (d1, p1, d2, p2) => {
+          const pid = d1 === 0 ? p2 : d2 === 0 ? p1 : null; // disco 0 = pelota
+          if (pid == null || !g) return;
+          const p = info(pid); if (p && p.team) passTouch(p, false);
+        },
+        onPlayerBallKick: id => {
+          if (!g) newGame();
+          const p = info(id);
+          if (p && p.team) { passTouch(p, true); lastKick = { name: p.name, team: p.team, game: g, tick }; }
+          touch(id);
+        },
         onGameTick: () => {
           tick++;
           const gs = reader.gameState; if (!gs) return;
@@ -89,6 +115,7 @@ export async function analyzeReplay(bytes, { onProgress } = {}) {
             } else own = last;
           }
           g.goals.push({ team: teamId, scorer, assist, own, time: gs ? gs.timeElapsed : 0 });
+          lastKick = null;
           if (gs) { g.red = gs.redScore; g.blue = gs.blueScore; }
           touches = [];
         },
