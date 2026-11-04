@@ -408,7 +408,7 @@ function matchForm(m){
       const games = await analyzeReplay(bytes, {onProgress: p => { const e=$("anprog"); if(e) e.textContent = Math.round(p*100)+"%"; }});
       if(!$("anout")) return;
       if(!games.length){ $("anout").innerHTML = '<div class="anbox"><div class="hint warn">No encontré ningún partido jugado en esa grabación.</div></div>'; return; }
-      an = {games, inc: games.map(g => g.ticks >= 3600 || g.goals.length > 0), team: [], sure: [], map:{}, kind:{}};
+      an = {games, inc: games.map(g => g.ticks >= 3600 || g.goals.length > 0), team: [], sure: [], map:{}, kind:{}, existing: formHasData() && !$("f-df").checked};
       if(!an.inc.some(Boolean)) an.inc = games.map(() => true);
       matchAll(); pickTeams(); renderAnalysis();
     }catch(err){ console.error(err); const o=$("anout"); if(o) o.innerHTML = '<div class="anbox"><div class="hint warn">'+esc(err.message || "No se pudo analizar la grabación.")+'</div></div>'; }
@@ -466,10 +466,76 @@ function matchForm(m){
       + '</tbody></table></div>';
     if(T.notes.length || T.sinAutor) h += '<div class="hint">'+T.notes.join(' · ')+(T.sinAutor ? (T.notes.length?' · ':'')+T.sinAutor+' gol(es) sin autor detectado.' : '')+'</div>';
     const missing = T.players.filter(pl => !an.map[pl.name]).length;
-    h += '<div class="acts"><button type="button" class="btn small" id="an-apply">Cargar resultado y estadísticas ('+T.gf+'–'+T.gc+')</button>'
-      + (missing ? '<span class="hint warn">Faltan '+missing+' nick'+(missing>1?'s':'')+' por asignar. Si no los asignás, sus goles no se suman.</span>' : '')+'</div>'
-      + '<div class="hint">La figura no se detecta sola: elegila vos en la tabla de jugadores.</div></div>';
+    const warnMissing = missing ? '<span class="hint warn">Faltan '+missing+' nick'+(missing>1?'s':'')+' por asignar. Si no los asignás, sus goles no se suman.</span>' : '';
+    if(an.existing){
+      an.changes = buildChanges(T);
+      h += '<div class="andiff"><b>Este partido ya tenía datos cargados.</b> '
+        + (an.changes.length ? 'Encontré <b>'+an.changes.length+'</b> diferencia'+(an.changes.length>1?'s':'')+'. Marcá las que querés aceptar:' : 'Lo que dice la grabación coincide con lo cargado: no hay cambios.')
+        + (an.changes.length ? '<ul class="anchanges">'+an.changes.map((c,i) => '<li><label><input type="checkbox" class="an-chg" data-i="'+i+'"'+(c.on?' checked':'')+'> '+c.label+'</label></li>').join("")+'</ul>' : '')
+        + '<div class="acts">'+(an.changes.length ? '<button type="button" class="btn small" id="an-accept">Aceptar los marcados</button><button type="button" class="btn ghost small" id="an-reject">Rechazar todos</button>' : '')+warnMissing+'</div></div>';
+    } else {
+      h += '<div class="acts"><button type="button" class="btn small" id="an-apply">Cargar resultado y estadísticas ('+T.gf+'–'+T.gc+')</button>'+warnMissing+'</div>';
+    }
+    h += '<div class="hint">La figura no se detecta sola: elegila vos en la tabla de jugadores.</div></div>';
     $("anout").innerHTML = h;
+  }
+  // ¿El formulario ya tiene resultado o estadísticas cargadas?
+  function formHasData(){
+    if($("f-gf").value!=="" || $("f-gc").value!=="") return true;
+    return [...form.querySelectorAll("tr[data-p]")].some(tr => $("pl-"+tr.dataset.p).checked);
+  }
+  // Lo que dice la grabación, por jugador del club.
+  function targetVals(T){
+    const v = {};
+    T.players.forEach(pl => { const pid = an.map[pl.name]; if(!pid || pid==="__none" || !$("pl-"+pid)) return;
+      const o = v[pid] || (v[pid] = {g:0, a:0, ps:0, pa:0, nicks:[]}); o.g += pl.g; o.a += pl.a; o.ps += pl.ps; o.pa += pl.pa; o.nicks.push(pl.name); });
+    return v;
+  }
+  function curVals(pid){
+    const tr = form.querySelector('tr[data-p="'+pid+'"]'), ps = $("ps-"+pid).value, pp = $("pp-"+pid).value;
+    return {played: $("pl-"+pid).checked, g: +$("g-"+pid).value||0, a: +$("a-"+pid).value||0,
+      ps: ps==="" ? null : +ps, pp: pp==="" ? null : +pp, pa: +tr.dataset.pa||0};
+  }
+  const pasesTxt = (ps, pp) => ps==null ? '—' : ps+(pp!=null ? ' ('+pp+'%)' : '');
+  const arrow = (x, y) => '<span class="anold">'+x+'</span> → <b>'+y+'</b>';
+  function buildChanges(T){
+    const ch = [], tv = targetVals(T);
+    const gf = $("f-gf").value, gc = $("f-gc").value;
+    if(+gf!==T.gf || +gc!==T.gc || gf==="" || gc==="")
+      ch.push({on:true, label:'Resultado: '+arrow((gf===""?"–":gf)+'–'+(gc===""?"–":gc), T.gf+'–'+T.gc), apply:() => { $("f-gf").value=T.gf; $("f-gc").value=T.gc; }});
+    roster.forEach(p => { const pid = p.id; if(!$("pl-"+pid)) return;
+      const c = curVals(pid), t = tv[pid], name = '<b>'+esc(p.name)+'</b>';
+      if(t){
+        if(!c.played) ch.push({on:true, label:name+': jugó '+arrow('no','sí'), apply:() => { $("pl-"+pid).checked = true; }});
+        if(c.g!==t.g) ch.push({on:true, label:name+': goles '+arrow(c.g, t.g), apply:() => { $("pl-"+pid).checked = true; $("g-"+pid).value = t.g || ""; }});
+        if(c.a!==t.a) ch.push({on:true, label:name+': asistencias '+arrow(c.a, t.a), apply:() => { $("pl-"+pid).checked = true; $("a-"+pid).value = t.a || ""; }});
+        const tpp = t.pa ? Math.round(100*t.ps/t.pa) : null;
+        if(t.pa && (c.ps!==t.ps || c.pp!==tpp)) ch.push({on:true, label:name+': pases '+arrow(pasesTxt(c.ps, c.pp), pasesTxt(t.ps, tpp)), apply:() => {
+          $("pl-"+pid).checked = true; $("ps-"+pid).value = t.ps; $("pp-"+pid).value = tpp; form.querySelector('tr[data-p="'+pid+'"]').dataset.pa = t.pa; }});
+      } else if(c.played){
+        // Cargado como que jugó, pero en la grabación no aparece (o su nick no está asignado): no se marca por defecto.
+        ch.push({on:false, label:name+': jugó '+arrow('sí','no')+(c.g||c.a ? ' (se le borrarían '+c.g+' G y '+c.a+' A)' : '')+' <span class="hint">· no aparece en la grabación</span>', apply:() => {
+          $("pl-"+pid).checked = false; $("g-"+pid).value=""; $("a-"+pid).value=""; $("ps-"+pid).value=""; $("pp-"+pid).value=""; delete form.querySelector('tr[data-p="'+pid+'"]').dataset.pa; }});
+      }
+    });
+    return ch;
+  }
+  function rememberNicks(T){
+    for(const k in aliasesToSave) delete aliasesToSave[k];
+    T.players.forEach(pl => { const pid = an.map[pl.name]; if(!pid || pid==="__none" || !$("pl-"+pid)) return;
+      const p = P(pid), r = matchNick(pl.name, [{id:pid, name:p.name, aliases:p.aliases||[]}]);
+      if(!(r && r.kind==="memoria")) (aliasesToSave[pid] = aliasesToSave[pid] || []).push(pl.name); });
+    return Object.values(aliasesToSave).reduce((x,y) => x+y.length, 0);
+  }
+  function acceptChanges(){
+    const T = totals(), picked = an.changes.filter((c,i) => { const el = form.querySelector('.an-chg[data-i="'+i+'"]'); return el && el.checked; });
+    $("st-j").checked = true; $("resblock").hidden = false;
+    if($("f-df").checked){ $("f-df").checked = false; syncDf(); }
+    picked.forEach(c => c.apply());
+    const n = rememberNicks(T);
+    tally();
+    $("anout").innerHTML = '<div class="anbox"><b>'+picked.length+' cambio'+(picked.length===1?'':'s')+' aplicado'+(picked.length===1?'':'s')+'.</b><div class="hint">Revisá la tabla de jugadores y tocá Guardar para que quede guardado.'+(n ? ' Se van a recordar '+n+' nick'+(n>1?'s':'')+' nuevo'+(n>1?'s':'')+'.' : '')+'</div></div>';
+    $("lineupblock").scrollIntoView({behavior:"smooth", block:"start"});
   }
   function applyAnalysis(){
     const T = totals();
@@ -500,6 +566,8 @@ function matchForm(m){
   });
   form.addEventListener("click", async e => {
     if(e.target.id==="an-apply"){ applyAnalysis(); return; }
+    if(e.target.id==="an-accept"){ acceptChanges(); return; }
+    if(e.target.id==="an-reject"){ $("anout").innerHTML = '<div class="anbox"><b>No se cambió nada.</b><div class="hint">Los datos del partido quedan como estaban.</div></div>'; return; }
     if(e.target.id==="an-saved" && m.rec){ e.target.disabled = true;
       try{ const snap = await getDoc(doc(db,"grabaciones",m.rec.id)); if(!snap.exists()) throw new Error("No se encontró la grabación guardada."); runAnalysis(snap.data().data.toUint8Array()); }
       catch(err){ toast(err.message || "No se pudo leer la grabación guardada."); }
