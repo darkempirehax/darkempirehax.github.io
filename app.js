@@ -226,12 +226,12 @@ function vStats(){
     const ties = best ? rows.filter(s => f(s)===best).map(s => P(s.id).name) : [];
     return '<div class="leader"><span>'+label+'</span>'+(best ? '<i class="num">'+best+'</i><b>'+esc(ties.join(", "))+'</b>' : '<b>—</b>')+'</div>'; }
   h += '<div class="leaders">'+top(s=>s.g,"Goleador")+top(s=>s.a,"Asistidor")+top(s=>s.mvp,"Más veces figura")+'</div>';
-  const cols=[["name","Jugador"],["pj","PJ"],["pg","PG"],["g","Goles"],["a","Asist."],["ga","G+A"],["mvp","Figura"],["ps","Pases"],["ppm","Pases por partido"],["pp","% Pases acertados"],["avg","Prom. gol"],["avga","Prom. G+A"]];
+  const cols=[["name","Jugador"],["pj","PJ"],["pg","PG"],["g","Goles"],["a","Asist."],["ga","G+A"],["mvp","Figura"],["ps","Pases"],["ppm","PxP"],["pp","%P.Acertados"],["avg","Prom. gol"],["avga","Prom. G+A"]];
   h += '<div class="tablewrap"><table><thead><tr>'+cols.map(c => '<th scope="col"><button data-act="sort" data-id="'+c[0]+'" aria-pressed="'+(k===c[0])+'">'+c[1]+(k===c[0]&&c[0]!=="name"?" ▾":"")+'</button></th>').join("")+'</tr></thead><tbody>'
     + rows.map(s => { const p=P(s.id), hl = c => k===c?' class="hl"':'';
       return '<tr'+(p.active===false?' class="off"':'')+'><td><button class="pname" data-act="p-view" data-id="'+esc(p.id)+'">'+esc(p.name)+'</button>'+posList(p).map(k => '<span class="pos">'+esc(k)+'</span>').join("")+'</td><td'+hl("pj")+'>'+s.pj+'</td><td'+hl("pg")+'>'+s.pg+'</td><td'+hl("g")+'>'+s.g+'</td><td'+hl("a")+'>'+s.a+'</td><td'+hl("ga")+'>'+(s.g+s.a)+'</td><td'+hl("mvp")+'>'+s.mvp+'</td><td'+hl("ps")+'>'+(s.pa?s.ps:"—")+'</td><td'+hl("ppm")+'>'+(s.pm?(s.ps/s.pm).toFixed(1):"—")+'</td><td'+hl("pp")+'>'+(s.pa?Math.round(100*s.ps/s.pa)+"%":"—")+'</td><td'+hl("avg")+'>'+(s.pj?(s.g/s.pj).toFixed(2):"—")+'</td><td'+hl("avga")+'>'+(s.pj?((s.g+s.a)/s.pj).toFixed(2):"—")+'</td></tr>'; }).join("")
     + '</tbody></table></div>'
-    + '<div class="hint">Pases = pases acertados (el compañero recibió la pelota, pateándola o con el cuerpo). Pases por partido = pases acertados ÷ partidos con pases cargados. % Pases acertados = pases acertados ÷ pases intentados.</div>';
+    + '<div class="hint">Pases = pases acertados (el compañero recibió la pelota, pateándola o con el cuerpo). PxP = pases acertados por partido (entre los partidos con pases cargados). %P.Acertados = pases acertados ÷ pases intentados.</div>';
   return h;
 }
 function vPlayers(){
