@@ -4,6 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { renderCalendario, webhookValido } from "./scripts/calendario-render.js";
+import { analyzeReplay, matchNick } from "./analizador.js";
 
 "use strict";
 const COLORS = ["#3a6fd8","#5aa9f0","#22b8cf","#1f9a8a","#2fbf71","#5f7f2e","#a3c94a","#e8c23a","#c48a12","#d0712b","#d4513f","#b3263e","#e04f86","#c2508f","#7b5cd6","#a77ef0","#8d6e63","#9ea7b3","#f1f0ec"];
@@ -300,7 +301,8 @@ async function syncDiscord(forceNew, loud){
       if(r.ok) edited = true; else if(r.status!==404) throw new Error("Discord "+r.status);
     }
     if(!edited){
-      const r = await fetch(disc.hook+"?wait=true", {method:"POST", headers:{"Content-Type":"application/json"}, body});
+      const post = JSON.stringify({content, allowed_mentions:{parse:[]}, username: (S.club && S.club.name) || "Dark Empire", avatar_url: new URL("favicon.png", location.href).href});
+      const r = await fetch(disc.hook+"?wait=true", {method:"POST", headers:{"Content-Type":"application/json"}, body: post});
       if(!r.ok) throw new Error("Discord "+r.status);
       const j = await r.json(); disc.msgId = String(j.id);
       await setDoc(doc(db,"club","discord"), {calMsgId: disc.msgId});
@@ -368,7 +370,9 @@ function matchForm(m){
     + '</div>'
     + '<div class="filein"><span>Grabación del partido (.hbr2)</span>'
     + (m.rec ? '<div class="recbox" id="recnow"><span style="color:var(--ink);font-weight:500">'+esc(m.rec.name)+' · '+kb(m.rec.size||0)+'</span><button type="button" class="btn ghost small" data-act="rec-rm">Quitar</button></div>' : '')
-    + '<input type="file" id="f-rec" accept=".hbr2,.hbr,.hbrp"><span class="hint" id="rechint">'+(m.rec?'Elegí otro archivo para reemplazarla.':'Opcional. Hasta 900 KB.')+'</span></div>'
+    + '<input type="file" id="f-rec" accept=".hbr2,.hbr,.hbrp"><span class="hint" id="rechint">'+(m.rec?'Elegí otro archivo para reemplazarla.':'Opcional. Hasta 900 KB. Al elegirla, la página lee goles y asistencias sola.')+'</span>'
+    + (m.rec ? '<div class="acts"><button type="button" class="btn ghost small" id="an-saved">Analizar la grabación guardada</button></div>' : '')
+    + '<div id="anout"></div></div>'
     + '<label class="f">Notas<input type="text" id="f-notes" maxlength="200" placeholder="Opcional: sala, árbitro, link del video…" value="'+esc(m.notes||"")+'"></label>'
     + foot(isNew ? "" : "¿Borrar este partido, sus estadísticas y su grabación?") + '</form>';
   openModal(h);
@@ -386,12 +390,116 @@ function matchForm(m){
     if(e.target.id==="f-df"){ if(!e.target.checked){ $("f-gf").value=""; $("f-gc").value=""; } syncDf(); }
     if(e.target.id==="f-rec"){ const f=e.target.files[0], hint=$("rechint");
       if(f && f.size>MAX_REC){ hint.textContent="Ese archivo pesa "+kb(f.size)+"; el máximo es 900 KB."; hint.className="hint warn"; e.target.value=""; }
-      else if(f){ hint.textContent="Se va a subir "+f.name+" ("+kb(f.size)+") al guardar."; hint.className="hint"; } }
+      else if(f){ hint.textContent="Se va a subir "+f.name+" ("+kb(f.size)+") al guardar."; hint.className="hint"; f.arrayBuffer().then(b => runAnalysis(new Uint8Array(b))); } }
     tally(); });
   form.addEventListener("input", e => { const t=e.target;
     if(t.id && /^(g|a)-/.test(t.id) && +t.value>0){ const cb=$("pl-"+t.id.slice(2)); if(cb) cb.checked=true; }
     if(t.name==="mvp"){ const c2=$("pl-"+t.value); if(c2) c2.checked=true; }
     tally(); });
+  /* --- analizador de la grabación --- */
+  const aliasesToSave = {};   // playerId -> [nicks nuevos para su memoria]
+  let an = null;              // {games, inc:[bool], team:[1|2], sure:[bool], map:{nick: playerId|"__none"|""}, kind:{nick: match}}
+  async function runAnalysis(bytes){
+    const out = $("anout"); if(!out) return;
+    out.innerHTML = '<div class="anbox"><b>Analizando la grabación…</b> <span id="anprog">0%</span><div class="hint">La página reproduce el partido por dentro. Tarda unos segundos.</div></div>';
+    try{
+      const games = await analyzeReplay(bytes, {onProgress: p => { const e=$("anprog"); if(e) e.textContent = Math.round(p*100)+"%"; }});
+      if(!$("anout")) return;
+      if(!games.length){ $("anout").innerHTML = '<div class="anbox"><div class="hint warn">No encontré ningún partido jugado en esa grabación.</div></div>'; return; }
+      an = {games, inc: games.map(g => g.ticks >= 3600 || g.goals.length > 0), team: [], sure: [], map:{}, kind:{}};
+      if(!an.inc.some(Boolean)) an.inc = games.map(() => true);
+      matchAll(); pickTeams(); renderAnalysis();
+    }catch(err){ console.error(err); const o=$("anout"); if(o) o.innerHTML = '<div class="anbox"><div class="hint warn">'+esc(err.message || "No se pudo analizar la grabación.")+'</div></div>'; }
+  }
+  const pool = () => roster.map(p => ({id:p.id, name:p.name, aliases:p.aliases||[]}));
+  const teamOf = pl => pl.ticks[1] >= pl.ticks[2] ? 1 : 2;
+  function matchAll(){
+    const names = new Set(); an.games.forEach(g => Object.values(g.players).forEach(pl => names.add(pl.name)));
+    names.forEach(n => { const r = matchNick(n, pool()); if(r){ an.map[n] = r.id; an.kind[n] = r; } });
+  }
+  // De qué color jugamos en cada tramo (en el 2º tiempo suelen cambiar de color).
+  function pickTeams(){
+    an.games.forEach((g,i) => { const cnt = {1:0, 2:0};
+      Object.values(g.players).forEach(pl => { const r = an.kind[pl.name]; if(r && an.map[pl.name]===r.id) cnt[teamOf(pl)] += r.kind==="memoria" ? 2 : 1; });
+      an.team[i] = cnt[2] > cnt[1] ? 2 : 1; an.sure[i] = cnt[1] !== cnt[2]; });
+    // Tramos sin nicks reconocidos: se deduce por los jugadores que comparten con un tramo ya resuelto.
+    an.games.forEach((g,i) => { if(an.sure[i]) return;
+      const j = an.games.findIndex((x,k) => an.sure[k]); if(j<0) return;
+      const ours = new Set(Object.values(an.games[j].players).filter(pl => teamOf(pl)===an.team[j]).map(pl => pl.name)), cnt = {1:0, 2:0};
+      Object.values(g.players).forEach(pl => { if(ours.has(pl.name)) cnt[teamOf(pl)]++; });
+      if(cnt[1] !== cnt[2]){ an.team[i] = cnt[2] > cnt[1] ? 2 : 1; an.sure[i] = true; } });
+  }
+  function totals(){
+    let gf = 0, gc = 0, ticks = 0; const pl = {}, notes = []; let sinAutor = 0;
+    an.games.forEach((g,i) => { if(!an.inc[i]) return; const t = an.team[i];
+      gf += t===1 ? g.red : g.blue; gc += t===1 ? g.blue : g.red; ticks += g.ticks;
+      Object.values(g.players).forEach(p => { if(teamOf(p)!==t) return; const o = pl[p.name] || (pl[p.name] = {name:p.name, ticks:0, g:0, a:0}); o.ticks += p.ticks[t]; });
+      g.goals.forEach(x => {
+        if(x.own) notes.push((x.team===t ? 'Gol a favor en contra de ' : 'Gol en contra de ')+esc(x.own.name)+' ('+fmtT(x.time)+')');
+        if(x.team!==t) return;
+        if(x.scorer){ (pl[x.scorer.name] = pl[x.scorer.name] || {name:x.scorer.name, ticks:0, g:0, a:0}).g++; } else if(!x.own) sinAutor++;
+        if(x.assist){ (pl[x.assist.name] = pl[x.assist.name] || {name:x.assist.name, ticks:0, g:0, a:0}).a++; }
+      }); });
+    const min = Math.max(180, ticks*0.08);
+    const players = Object.values(pl).filter(p => p.ticks >= min || p.g || p.a).sort((a,b) => b.ticks - a.ticks);
+    return {gf, gc, players, notes, sinAutor};
+  }
+  const fmtT = t => { t = Math.max(0, Math.round(t||0)); return Math.floor(t/60)+":"+String(t%60).padStart(2,"0"); };
+  function renderAnalysis(){
+    const T = totals();
+    const opts = sel => '<option value="">¿Quién es?</option>'+roster.map(p => '<option value="'+esc(p.id)+'"'+(sel===p.id?' selected':'')+'>'+esc(p.name)+'</option>').join("")+'<option value="__none"'+(sel==="__none"?' selected':'')+'>No es del club</option>';
+    let h = '<div class="anbox"><b>Grabación analizada</b>';
+    h += '<div class="anparts">'+an.games.map((g,i) => '<div class="anpart'+(an.inc[i]?'':' off')+'">'
+        + '<label class="anchk"><input type="checkbox" class="an-inc" data-i="'+i+'"'+(an.inc[i]?' checked':'')+'> '+(an.games.length>1 ? (i+1)+'º tramo' : 'Partido')+' · '+fmtT(g.ticks/60)+'</label>'
+        + '<span class="anscore"><span class="anteam red">Rojo '+g.red+'</span> – <span class="anteam blue">'+g.blue+' Azul</span></span>'
+        + '<span class="anrow">Somos <span class="seg small"><label><input type="radio" name="an-team-'+i+'" data-i="'+i+'" value="1"'+(an.team[i]===1?' checked':'')+'>Rojo</label><label><input type="radio" name="an-team-'+i+'" data-i="'+i+'" value="2"'+(an.team[i]===2?' checked':'')+'>Azul</label></span>'
+        + (an.sure[i] ? '' : '<span class="hint warn">Elegí el color</span>')+'</span></div>').join("")+'</div>';
+    h += '<div class="antotal">Resultado: <b>'+T.gf+' – '+T.gc+'</b>'+(an.games.length>1 ? ' <span class="hint">(suma de los tramos marcados)</span>' : '')+'</div>';
+    h += '<div class="tablewrap"><table class="antable"><thead><tr><th>Nick en la grabación</th><th>Jugador del club</th><th>G</th><th>A</th></tr></thead><tbody>'
+      + (T.players.length ? T.players.map(pl => { const k = an.kind[pl.name], sel = an.map[pl.name] || "";
+          const tag = !sel ? '<span class="antag ask">Asignar</span>' : sel==="__none" ? '' : k && k.kind==="memoria" && k.id===sel ? '<span class="antag ok">Reconocido</span>' : k && k.id===sel ? '<span class="antag sim">'+(k.ambiguous?'Revisar':'Parecido')+'</span>' : '<span class="antag man">Elegido</span>';
+          return '<tr><td>'+esc(pl.name)+' '+tag+'</td><td><select class="an-map" data-nick="'+esc(pl.name)+'" aria-label="Jugador del club para '+esc(pl.name)+'">'+opts(sel)+'</select></td><td>'+pl.g+'</td><td>'+pl.a+'</td></tr>'; }).join("")
+        : '<tr><td colspan="4" class="hint">No hay jugadores de nuestro equipo en los tramos marcados.</td></tr>')
+      + '</tbody></table></div>';
+    if(T.notes.length || T.sinAutor) h += '<div class="hint">'+T.notes.join(' · ')+(T.sinAutor ? (T.notes.length?' · ':'')+T.sinAutor+' gol(es) sin autor detectado.' : '')+'</div>';
+    const missing = T.players.filter(pl => !an.map[pl.name]).length;
+    h += '<div class="acts"><button type="button" class="btn small" id="an-apply">Cargar resultado y estadísticas ('+T.gf+'–'+T.gc+')</button>'
+      + (missing ? '<span class="hint warn">Faltan '+missing+' nick'+(missing>1?'s':'')+' por asignar. Si no los asignás, sus goles no se suman.</span>' : '')+'</div>'
+      + '<div class="hint">La figura no se detecta sola: elegila vos en la tabla de jugadores.</div></div>';
+    $("anout").innerHTML = h;
+  }
+  function applyAnalysis(){
+    const T = totals();
+    $("st-j").checked = true; $("resblock").hidden = false;
+    if($("f-df").checked){ $("f-df").checked = false; syncDf(); }
+    $("f-gf").value = T.gf; $("f-gc").value = T.gc;
+    form.querySelectorAll("tr[data-p]").forEach(tr => { const id=tr.dataset.p; $("pl-"+id).checked=false; $("g-"+id).value=""; $("a-"+id).value=""; });
+    for(const k in aliasesToSave) delete aliasesToSave[k];
+    T.players.forEach(pl => { const pid = an.map[pl.name]; if(!pid || pid==="__none" || !$("pl-"+pid)) return;
+      $("pl-"+pid).checked = true;
+      $("g-"+pid).value = ((+$("g-"+pid).value||0) + pl.g) || "";
+      $("a-"+pid).value = ((+$("a-"+pid).value||0) + pl.a) || "";
+      const p = P(pid), r = matchNick(pl.name, [{id:pid, name:p.name, aliases:p.aliases||[]}]);
+      if(!(r && r.kind==="memoria")) (aliasesToSave[pid] = aliasesToSave[pid] || []).push(pl.name);
+    });
+    tally();
+    const n = Object.values(aliasesToSave).reduce((a,b) => a+b.length, 0);
+    toast("Datos cargados. Revisalos y tocá Guardar."+(n ? " Se van a recordar "+n+" nick"+(n>1?"s":"")+" nuevo"+(n>1?"s":"")+"." : ""));
+    $("lineupblock").scrollIntoView({behavior:"smooth", block:"start"});
+  }
+  form.addEventListener("change", e => {
+    if(!an) return; const t = e.target;
+    if(t.classList.contains("an-map")){ an.map[t.dataset.nick] = t.value; renderAnalysis(); }
+    if(t.classList.contains("an-inc")){ an.inc[+t.dataset.i] = t.checked; renderAnalysis(); }
+    if(t.name && t.name.startsWith("an-team-")){ an.team[+t.dataset.i] = +t.value; an.sure[+t.dataset.i] = true; renderAnalysis(); }
+  });
+  form.addEventListener("click", async e => {
+    if(e.target.id==="an-apply"){ applyAnalysis(); return; }
+    if(e.target.id==="an-saved" && m.rec){ e.target.disabled = true;
+      try{ const snap = await getDoc(doc(db,"grabaciones",m.rec.id)); if(!snap.exists()) throw new Error("No se encontró la grabación guardada."); runAnalysis(snap.data().data.toUint8Array()); }
+      catch(err){ toast(err.message || "No se pudo leer la grabación guardada."); }
+      e.target.disabled = false; }
+  });
   form.addEventListener("click", e => { if(e.target.closest('[data-act="rec-rm"]')){ removeRec = true; $("recnow").remove(); $("rechint").textContent = "La grabación se va a quitar al guardar."; } });
   tally();
   onDelete = async () => {
@@ -424,7 +532,10 @@ function matchForm(m){
       }catch(err){ console.error(err); busy=false; setSaving(false); toast(errMsg(err, "No se pudo subir la grabación.")); return; }
       busy = false;
     }
-    const ok = await commit(n => { const i=n.matches.findIndex(x => x.id===nm.id); if(i<0) n.matches.push(nm); else n.matches[i]=nm; },
+    const ok = await commit(n => { const i=n.matches.findIndex(x => x.id===nm.id); if(i<0) n.matches.push(nm); else n.matches[i]=nm;
+        if(st==="jugado") for(const pid in aliasesToSave){ const p = n.players.find(x => x.id===pid); if(!p) continue;
+          const have = new Set([p.name, ...(p.aliases||[])].map(x => String(x).toLowerCase()));
+          p.aliases = (p.aliases||[]).concat(aliasesToSave[pid].filter(a => !have.has(String(a).toLowerCase()))).slice(-30); } },
       isNew ? "Partido agregado al fixture" : (nm.df ? "Guardado como DF (3–0)" : st==="jugado" ? "Resultado guardado" : "Partido actualizado"));
     if(ok && oldRec && (!nm.rec || nm.rec.id!==oldRec.id)) deleteDoc(doc(db,"grabaciones",oldRec.id)).catch(()=>{});
     if(!ok && file && nm.rec) deleteDoc(doc(db,"grabaciones",nm.rec.id)).catch(()=>{});
@@ -463,6 +574,7 @@ function playerForm(p){
   openModal('<form id="pe"><h2>'+esc(p.name)+'</h2><div class="fields">'
     + '<label class="f">Nick<input type="text" id="f-pname" required maxlength="40" value="'+esc(p.name)+'"></label>'
         + '<label class="f">Avatar<input type="text" id="f-num" maxlength="6" autocomplete="off" placeholder="Ej: 10, ☠, DE" value="'+esc(p.num||"")+'"></label></div>'
+    + '<label class="f">Nicks que usa en Haxball<input type="text" id="f-aliases" maxlength="400" autocomplete="off" placeholder="Ej: petr, pet, cech" value="'+esc((p.aliases||[]).join(", "))+'"><span class="hint">Separados por coma. El analizador de grabaciones los usa para reconocerlo, y suma solo los nicks nuevos que le asignes.</span></label>'
     + '<div class="filein"><span>Posiciones (podés marcar varias)</span><div class="chips poschk" role="group" aria-label="Posiciones">'+Object.keys(POS).map(k => '<label class="chip"><input type="checkbox" name="pos" id="pos-'+k+'" value="'+k+'"'+(posList(p).includes(k)?' checked':'')+'>'+POS[k]+'</label>').join("")+'</div></div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="ac" id="ac-1" value="1"'+(p.active!==false?' checked':'')+'>En el plantel</label><label><input type="radio" name="ac" id="ac-0" value="0"'+(p.active===false?' checked':'')+'>De baja</label></div>'
     + (hasStats ? '<div class="hint">Tiene estadísticas cargadas: si se va del club, dalo de baja en vez de borrarlo así no se pierden.</div>' : '')
@@ -471,7 +583,7 @@ function playerForm(p){
   onDelete = () => commit(n => { n.players=n.players.filter(x => x.id!==p.id);
     n.matches.forEach(m => { if(m.lineup) m.lineup=m.lineup.filter(r => r.p!==p.id); if(m.mvp===p.id) m.mvp=null; }); }, "Jugador borrado");
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-pname").value.trim(); if(!nm) return;
-    const upd={name:nm, pos:[...form.querySelectorAll('input[name="pos"]:checked')].map(x => x.value), num:document.getElementById("f-num").value.trim(), active: form.querySelector('input[name="ac"]:checked').value==="1"};
+    const upd={name:nm, pos:[...form.querySelectorAll('input[name="pos"]:checked')].map(x => x.value), num:document.getElementById("f-num").value.trim(), active: form.querySelector('input[name="ac"]:checked').value==="1", aliases: [...new Set(document.getElementById("f-aliases").value.split(",").map(x => x.trim()).filter(Boolean))].slice(0,30)};
     commit(n => { const x = n.players.find(x => x.id===p.id); if(x) Object.assign(x, upd); }, "Jugador actualizado"); });
 }
 function leagueForm(l){
