@@ -1,0 +1,26 @@
+name: Avisos del día en Discord
+
+on:
+  workflow_dispatch:
+    inputs:
+      fecha:
+        description: "Fecha (AAAA-MM-DD). Vacío = hoy."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Mandar avisos de los partidos del día
+        run: node scripts/avisos-dia.mjs
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          FECHA: ${{ inputs.fecha }}
