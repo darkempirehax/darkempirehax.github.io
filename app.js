@@ -3,7 +3,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { renderCalendario, webhookValido } from "./scripts/calendario-render.js?v=20261104";
+import { renderCalendario, webhookValido, avisosDelDia } from "./scripts/calendario-render.js?v=20261105";
 import { analyzeReplay, matchNick } from "./analizador.js?v=20261104";
 
 "use strict";
@@ -22,7 +22,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
-const disc = {hook:"", msgId:"", last:"", loaded:false, bot:"", chan:"", emojis:"✅ 🟡 ❌", daySent:""};
+const disc = {hook:"", msgId:"", last:"", loaded:false, gh:"", chan:"", emojis:"✅ 🟡 ❌", daySent:""};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 ui.leagues = []; ui.groups = []; ui.statMode = "liga"; ui.fOpen = false;   // filtros: vacío = todas
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.leagues = Array.isArray(sv.leagues) ? sv.leagues : []; ui.groups = Array.isArray(sv.groups) ? sv.groups : []; ui.statMode = sv.statMode==="grupo" ? "grupo" : "liga"; ui.sort = sv.sort || "g"; } }catch(e){}
@@ -322,82 +322,70 @@ function discordSection(){
     + (ok && disc.msgId ? '<button class="btn ghost small" data-act="dc-new">Publicar de nuevo</button>' : '')
     + '</div></div>'
     + '<div class="card"><div class="sub">Aviso de los partidos del día: un mensaje por partido, etiquetando el rol de la liga y con reacciones. Se manda con el botón <b>Avisar partidos de hoy</b> en Partidos.</div>'
-    + (!disc.loaded ? '' : disc.bot && disc.chan ? '<div class="hint">Bot configurado · canal '+esc(disc.chan)+' · reacciones: '+(esc(disc.emojis)||'ninguna')+'</div>' : '<div class="hint warn">Falta configurar el bot de Discord.</div>')
+    + (!disc.loaded ? '' : disc.gh && disc.chan ? '<div class="hint">Avisos configurados · canal '+esc(disc.chan)+' · reacciones: '+(esc(disc.emojis)||'ninguna')+'</div>' : '<div class="hint warn">Faltan configurar los avisos del día.</div>')
     + (disc.loaded ? (()=>{ const sin = S.leagues.filter(l => !l.role).length; return sin ? '<div class="hint">'+sin+' liga'+(sin>1?'s':'')+' sin rol de Discord: se van a nombrar sin etiquetar. Cargalo en <b>Editar</b> de cada liga.</div>' : ''; })() : '')
-    + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.bot ? 'Cambiar bot' : 'Configurar bot')+'</button></div></div></section>';
+    + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.gh ? 'Cambiar configuración' : 'Configurar avisos')+'</button></div></div></section>';
 }
-/* ---------- Discord: aviso de los partidos del día (bot) ---------- */
-const DAPI = "https://discord.com/api/v10";
-function horaHS(t){ if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return "HORA A CONF."; const [h,mi] = t.split(":"); return (mi==="00" ? String(+h) : (+h)+":"+mi)+"HS"; }
-const dcClean = x => String(x||"").replace(/[`*_~|\\@<>]/g,"").replace(/\s+/g," ").trim().toUpperCase();
-function todayMatches(){ const t = todayStr(); return S.matches.filter(m => m.date===t && m.status!=="jugado").sort((a,b) => (a.time||"99:99").localeCompare(b.time||"99:99")); }
-function dayMessage(m, preview){ const l = L(m.league); const tag = l && l.role ? (preview ? "@"+l.name : "<@&"+l.role+">") : (l ? dcClean(l.short||l.name) : "SIN LIGA"); return horaHS(m.time)+" "+tag+" VS "+dcClean(m.rival); }
-function parseEmojis(txt){ return String(txt||"").split(/[\s,]+/).filter(Boolean).map(e => { const c = e.match(/^<a?:(\w+):(\d+)>$/); return c ? c[1]+":"+c[2] : e; }).slice(0,10); }
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function dapi(method, path, body){
-  for(let i=0;i<5;i++){
-    const r = await fetch(DAPI+path, {method, headers: Object.assign({"Authorization":"Bot "+disc.bot}, body ? {"Content-Type":"application/json"} : {}), body: body ? JSON.stringify(body) : undefined});
-    if(r.status===429){ let w = 1; try{ w = (await r.json()).retry_after || 1; }catch(e){} await sleep(w*1000+100); continue; }
-    if(!r.ok){ let msg = ""; try{ msg = (await r.json()).message || ""; }catch(e){} const err = new Error(msg || ("Discord "+r.status)); err.status = r.status; throw err; }
-    return r.status===204 ? null : r.json();
-  }
-  throw new Error("Discord está limitando los envíos. Probá en un minuto.");
-}
+/* ---------- Discord: aviso de los partidos del día ----------
+   Discord no deja que el navegador use el bot, así que la página le pide a GitHub que corra
+   la tarea "Avisos del día en Discord" (.github/workflows/avisos-dia.yml), que manda los mensajes
+   con el bot y pone las reacciones. Para pedírselo usa un token de GitHub que solo ven los capitanes. */
+const GH_REPO = (() => { const h = location.hostname; return /\.github\.io$/i.test(h) ? h.split(".")[0]+"/"+h.toLowerCase() : ""; })();
+function todayMatches(){ return avisosDelDia(S, todayStr()); }
 function dayNoticeForm(){
   const ms = todayMatches(), again = disc.daySent===todayStr();
-  if(!disc.bot || !disc.chan){ toast("Primero configurá el bot en Ligas → Discord."); return; }
+  if(!disc.gh || !disc.chan){ toast("Primero configurá los avisos en Ligas → Discord."); return; }
   openModal('<div class="pview"><h2>Avisar partidos de hoy</h2>'
-    + (ms.length ? '<div class="hint">Se van a mandar '+ms.length+' mensaje'+(ms.length>1?'s':'')+' al canal, cada uno con las reacciones '+esc(disc.emojis||"(ninguna)")+':</div><pre class="dcpre">'+esc(ms.map(m => dayMessage(m, true)).join("\n"))+'</pre>'
-        + (ms.some(m => !(L(m.league)||{}).role) ? '<div class="hint warn">Alguna liga no tiene rol de Discord: se nombra sin etiquetar.</div>' : '')
+    + (ms.length ? '<div class="hint">Se van a mandar '+ms.length+' mensaje'+(ms.length>1?'s':'')+' al canal, cada uno con las reacciones '+esc(disc.emojis||"(ninguna)")+':</div><pre class="dcpre">'+esc(ms.map(m => m.preview).join("\n"))+'</pre>'
+        + (ms.some(m => !m.roles.length) ? '<div class="hint warn">Alguna liga no tiene rol de Discord: se nombra sin etiquetar.</div>' : '<div class="hint">El @ es la etiqueta del rol de cada liga.</div>')
         + (again ? '<div class="hint warn">Hoy ya se mandó el aviso. Si lo mandás otra vez, van a quedar repetidos.</div>' : '')
       : '<div class="empty">No hay partidos pendientes programados para hoy.</div>')
     + '<div class="hint" id="daystat"></div>'
     + '<div class="mfoot"><button type="button" class="btn ghost" data-act="close">Cancelar</button>'+(ms.length ? '<button type="button" class="btn" id="day-send">'+(again?'Mandar de nuevo':'Mandar')+'</button>' : '')+'</div></div>');
   const btn = document.getElementById("day-send"); if(!btn) return;
   btn.addEventListener("click", async () => {
-    if(busy) return; busy = true; btn.disabled = true; const st = document.getElementById("daystat"), emojis = parseEmojis(disc.emojis);
-    let sent = 0, reactFail = 0;
+    if(busy) return; const st = document.getElementById("daystat");
+    if(!GH_REPO){ st.textContent = "Esto funciona solo desde la página publicada en GitHub."; st.className = "hint warn"; return; }
+    busy = true; btn.disabled = true; st.textContent = "Pidiéndole a GitHub que mande los avisos…"; st.className = "hint";
     try{
-      for(const m of ms){
-        st.textContent = "Mandando "+(sent+1)+" de "+ms.length+"…";
-        const l = L(m.league), roles = l && l.role ? [String(l.role)] : [];
-        const msg = await dapi("POST", "/channels/"+disc.chan+"/messages", {content: dayMessage(m), allowed_mentions:{parse:[], roles}});
-        sent++;
-        for(const e of emojis){ try{ await dapi("PUT", "/channels/"+disc.chan+"/messages/"+msg.id+"/reactions/"+encodeURIComponent(e)+"/@me"); await sleep(300); }catch(err){ console.error(err); reactFail++; } }
-      }
+      const r = await fetch("https://api.github.com/repos/"+GH_REPO+"/actions/workflows/avisos-dia.yml/dispatches", {method:"POST",
+        headers:{"Authorization":"Bearer "+disc.gh, "Accept":"application/vnd.github+json", "Content-Type":"application/json"}, body: JSON.stringify({ref:"main", inputs:{fecha: todayStr()}})});
+      if(r.status!==204){ let m=""; try{ m=(await r.json()).message||""; }catch(e){}
+        throw new Error(r.status===401 ? "El token de GitHub no es válido o venció." : r.status===403 ? "El token de GitHub no tiene permiso de Actions (lectura y escritura) en este repositorio." : r.status===404 ? "GitHub no encuentra la tarea avisos-dia.yml: revisá que esté subida en .github/workflows y que el token tenga acceso al repositorio." : (m || "GitHub respondió "+r.status)); }
       try{ await setDoc(doc(db,"privado","discord"), {daySent: todayStr()}, {merge:true}); disc.daySent = todayStr(); }catch(e){}
-      busy = false; closeModal();
-      toast(sent+" aviso"+(sent>1?"s":"")+" mandado"+(sent>1?"s":"")+" a Discord"+(reactFail ? " · "+reactFail+" reacción(es) no se pudieron poner: revisá los emojis y el permiso Agregar reacciones." : "."));
-    }catch(err){
-      console.error(err); busy = false; btn.disabled = false;
-      const why = err.status===401 ? "El token del bot no es válido." : err.status===403 ? "El bot no tiene permiso en ese canal (ver canal, enviar mensajes, agregar reacciones)." : err.status===404 ? "No encontré el canal: revisá el ID." : (err instanceof TypeError ? "El navegador no pudo conectarse con Discord." : err.message);
-      st.textContent = (sent ? "Se mandaron "+sent+" de "+ms.length+". " : "")+"No se pudo seguir: "+why; st.className = "hint warn";
-    }
+      busy = false;
+      st.innerHTML = 'Listo: GitHub los va a mandar en menos de un minuto. Si no aparecen, mirá la tarea en <a href="https://github.com/'+esc(GH_REPO)+'/actions/workflows/avisos-dia.yml" target="_blank" rel="noopener">GitHub → Actions</a>.';
+      btn.remove(); toast("Avisos enviados a GitHub");
+    }catch(err){ console.error(err); busy = false; btn.disabled = false; st.textContent = "No se pudo: "+(err instanceof TypeError ? "no hubo conexión con GitHub." : err.message); st.className = "hint warn"; }
   });
 }
 function botConfigForm(){
-  openModal('<form id="bcf"><h2>Bot de Discord</h2>'
-    + '<div class="hint">Sirve para mandar los avisos del día con reacciones (un webhook no puede reaccionar). Solo los capitanes pueden ver estos datos.</div>'
-    + '<label class="f">Token del bot<input type="password" id="f-btoken" autocomplete="off" placeholder="'+(disc.bot ? 'Guardado (dejalo vacío para no cambiarlo)' : 'Pegá el token')+'"></label>'
+  openModal('<form id="bcf"><h2>Avisos del día</h2>'
+    + '<div class="hint">El bot manda los mensajes desde GitHub. Su token va como secret en GitHub, no acá (ver la guía).</div>'
     + '<label class="f">ID del canal de los avisos<input type="text" id="f-bchan" inputmode="numeric" autocomplete="off" value="'+esc(disc.chan)+'" placeholder="Ej: 1234567890123456789"></label>'
     + '<label class="f">Reacciones (separadas por espacio)<input type="text" id="f-bemo" autocomplete="off" value="'+esc(disc.emojis)+'" placeholder="✅ 🟡 ❌"><span class="hint">Emojis comunes, o del servidor con el formato &lt;:nombre:id&gt;.</span></label>'
+    + '<label class="f">Token de GitHub para el botón<input type="password" id="f-bgh" autocomplete="off" placeholder="'+(disc.gh ? 'Guardado (dejalo vacío para no cambiarlo)' : 'github_pat_…')+'"><span class="hint">Token "fine-grained" con acceso solo a este repositorio y permiso Actions: lectura y escritura. Solo lo ven los capitanes.</span></label>'
     + '<div class="hint" id="bchint"></div>'+foot("")+'</form>');
   document.getElementById("bcf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
-    const tok = document.getElementById("f-btoken").value.trim(), chan = document.getElementById("f-bchan").value.trim(), emo = document.getElementById("f-bemo").value.trim(), hint = document.getElementById("bchint");
-    if(!tok && !disc.bot){ hint.textContent = "Falta el token del bot."; hint.className = "hint warn"; return; }
+    const gh = document.getElementById("f-bgh").value.trim(), chan = document.getElementById("f-bchan").value.trim(), emo = document.getElementById("f-bemo").value.trim(), hint = document.getElementById("bchint");
     if(!/^\d{15,25}$/.test(chan)){ hint.textContent = "El ID del canal son solo números (unos 18 o 19). En Discord: clic derecho en el canal → Copiar ID del canal."; hint.className = "hint warn"; return; }
+    if(!gh && !disc.gh){ hint.textContent = "Falta el token de GitHub."; hint.className = "hint warn"; return; }
+    if(gh && !/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(gh)){ hint.textContent = "Ese no parece un token de GitHub (empieza con github_pat_)."; hint.className = "hint warn"; return; }
     busy = true; setSaving(true);
-    const data = {dayChannel: chan, dayEmojis: emo}; if(tok) data.botToken = tok;
-    try{ await setDoc(doc(db,"privado","discord"), data, {merge:true}); }
-    catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar.")); return; }
-    busy = false; if(tok) disc.bot = tok; disc.chan = chan; disc.emojis = emo; closeModal(); toast("Bot guardado"); render();
+    try{
+      await setDoc(doc(db,"club","discord"), {dayChannel: chan, dayEmojis: emo}, {merge:true});
+      if(gh) await setDoc(doc(db,"privado","discord"), {ghToken: gh, botToken: null}, {merge:true});
+    }catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar.")); return; }
+    busy = false; if(gh) disc.gh = gh; disc.chan = chan; disc.emojis = emo; closeModal(); toast("Avisos configurados"); render();
   });
 }
 async function loadDiscord(){
   try{
     const [p, c] = await Promise.all([getDoc(doc(db,"privado","discord")), getDoc(doc(db,"club","discord"))]);
     const pd = p.exists() ? p.data() : {};
-    disc.hook = pd.calWebhook || ""; disc.bot = pd.botToken || ""; disc.chan = pd.dayChannel || ""; disc.emojis = pd.dayEmojis!=null ? pd.dayEmojis : "✅ 🟡 ❌"; disc.daySent = pd.daySent || "";
+    const cd = c.exists() ? c.data() : {};
+    disc.hook = pd.calWebhook || ""; disc.gh = pd.ghToken || ""; disc.daySent = pd.daySent || "";
+    disc.chan = cd.dayChannel || ""; disc.emojis = cd.dayEmojis!=null ? cd.dayEmojis : "✅ 🟡 ❌";
     disc.msgId = c.exists() ? (c.data().calMsgId || "") : "";
   }catch(e){ console.error(e); }
   disc.loaded = true;
