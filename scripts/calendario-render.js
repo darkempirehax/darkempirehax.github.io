@@ -49,3 +49,28 @@ export function renderCalendario(data, hoy) {
 export function webhookValido(u) {
   return /^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(String(u || "").trim());
 }
+
+// Avisos de los partidos del día: un mensaje por partido, con el rol de Discord de la liga.
+// Devuelve [{content, roles, preview}] (preview = texto legible, con el nombre de la liga en vez del rol).
+export function avisosDelDia(data, hoy) {
+  const leagues = (data && data.leagues) || [], matches = (data && data.matches) || [];
+  return matches
+    .filter(m => m.date === hoy && m.status !== "jugado")
+    .sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"))
+    .map(m => {
+      const l = leagues.find(x => x.id === m.league);
+      const role = l && /^\d{15,25}$/.test(String(l.role || "")) ? String(l.role) : "";
+      const nombre = l ? limpio(l.short || l.name) : "SIN LIGA";
+      const base = hora(m.time) + " ";
+      return {
+        content: base + (role ? "<@&" + role + ">" : nombre) + " VS " + limpio(m.rival),
+        preview: base + (role ? "@" + (l.name || nombre) : nombre) + " VS " + limpio(m.rival),
+        roles: role ? [role] : [],
+      };
+    });
+}
+
+// Reacciones: emojis separados por espacio o coma; los del servidor como <:nombre:id>.
+export function parseEmojis(txt) {
+  return String(txt || "").split(/[\s,]+/).filter(Boolean).map(e => { const c = e.match(/^<a?:(\w+):(\d+)>$/); return c ? c[1] + ":" + c[2] : e; }).slice(0, 10);
+}
