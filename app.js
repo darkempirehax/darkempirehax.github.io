@@ -22,7 +22,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
-const disc = {hook:"", msgId:"", last:"", loaded:false};
+const disc = {hook:"", msgId:"", last:"", loaded:false, bot:"", chan:"", emojis:"✅ 🟡 ❌", daySent:""};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 ui.leagues = []; ui.groups = []; ui.statMode = "liga"; ui.fOpen = false;   // filtros: vacío = todas
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.leagues = Array.isArray(sv.leagues) ? sv.leagues : []; ui.groups = Array.isArray(sv.groups) ? sv.groups : []; ui.statMode = sv.statMode==="grupo" ? "grupo" : "liga"; ui.sort = sv.sort || "g"; } }catch(e){}
@@ -157,7 +157,7 @@ function startGuide(){
 }
 function vMatches(){
   const list = S.matches.filter(inLeague), up = upcoming(list), pl = played(list);
-  let h = '<div class="bar">'+leagueChips()+(canWrite ? '<button class="btn" data-act="m-new"'+(S.leagues.length?'':' disabled title="Primero creá una liga"')+'>+ Partido</button>' : '')+'</div>';
+  let h = '<div class="bar">'+leagueChips()+(canWrite ? '<div class="acts">'+(todayMatches().length ? '<button class="btn ghost" data-act="day-notice">Avisar partidos de hoy</button>' : '')+'<button class="btn" data-act="m-new"'+(S.leagues.length?'':' disabled title="Primero creá una liga"')+'>+ Partido</button></div>' : '')+'</div>';
   if(selLeagues().length===1 && tablaBtn(L(selLeagues()[0]))) h += '<div class="acts">'+tablaBtn(L(selLeagues()[0]))+'</div>';
   if(!S.matches.length) return h + startGuide();
   h += '<section class="sec"><h2>Próximos <small>'+up.length+'</small></h2>'+(up.length ? '<div class="list">'+up.map(matchRow).join("")+'</div>' : '<div class="empty">No hay partidos pendientes'+(selLeagues().length?" con este filtro":"")+'.</div>')+'</section>';
@@ -320,12 +320,84 @@ function discordSection(){
     + '<button class="btn ghost small" data-act="dc-preview">Ver mensaje</button>'
     + (ok ? '<button class="btn ghost small" data-act="dc-sync">Actualizar ahora</button>' : '')
     + (ok && disc.msgId ? '<button class="btn ghost small" data-act="dc-new">Publicar de nuevo</button>' : '')
-    + '</div></div></section>';
+    + '</div></div>'
+    + '<div class="card"><div class="sub">Aviso de los partidos del día: un mensaje por partido, etiquetando el rol de la liga y con reacciones. Se manda con el botón <b>Avisar partidos de hoy</b> en Partidos.</div>'
+    + (!disc.loaded ? '' : disc.bot && disc.chan ? '<div class="hint">Bot configurado · canal '+esc(disc.chan)+' · reacciones: '+(esc(disc.emojis)||'ninguna')+'</div>' : '<div class="hint warn">Falta configurar el bot de Discord.</div>')
+    + (disc.loaded ? (()=>{ const sin = S.leagues.filter(l => !l.role).length; return sin ? '<div class="hint">'+sin+' liga'+(sin>1?'s':'')+' sin rol de Discord: se van a nombrar sin etiquetar. Cargalo en <b>Editar</b> de cada liga.</div>' : ''; })() : '')
+    + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.bot ? 'Cambiar bot' : 'Configurar bot')+'</button></div></div></section>';
+}
+/* ---------- Discord: aviso de los partidos del día (bot) ---------- */
+const DAPI = "https://discord.com/api/v10";
+function horaHS(t){ if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return "HORA A CONF."; const [h,mi] = t.split(":"); return (mi==="00" ? String(+h) : (+h)+":"+mi)+"HS"; }
+const dcClean = x => String(x||"").replace(/[`*_~|\\@<>]/g,"").replace(/\s+/g," ").trim().toUpperCase();
+function todayMatches(){ const t = todayStr(); return S.matches.filter(m => m.date===t && m.status!=="jugado").sort((a,b) => (a.time||"99:99").localeCompare(b.time||"99:99")); }
+function dayMessage(m, preview){ const l = L(m.league); const tag = l && l.role ? (preview ? "@"+l.name : "<@&"+l.role+">") : (l ? dcClean(l.short||l.name) : "SIN LIGA"); return horaHS(m.time)+" "+tag+" VS "+dcClean(m.rival); }
+function parseEmojis(txt){ return String(txt||"").split(/[\s,]+/).filter(Boolean).map(e => { const c = e.match(/^<a?:(\w+):(\d+)>$/); return c ? c[1]+":"+c[2] : e; }).slice(0,10); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function dapi(method, path, body){
+  for(let i=0;i<5;i++){
+    const r = await fetch(DAPI+path, {method, headers: Object.assign({"Authorization":"Bot "+disc.bot}, body ? {"Content-Type":"application/json"} : {}), body: body ? JSON.stringify(body) : undefined});
+    if(r.status===429){ let w = 1; try{ w = (await r.json()).retry_after || 1; }catch(e){} await sleep(w*1000+100); continue; }
+    if(!r.ok){ let msg = ""; try{ msg = (await r.json()).message || ""; }catch(e){} const err = new Error(msg || ("Discord "+r.status)); err.status = r.status; throw err; }
+    return r.status===204 ? null : r.json();
+  }
+  throw new Error("Discord está limitando los envíos. Probá en un minuto.");
+}
+function dayNoticeForm(){
+  const ms = todayMatches(), again = disc.daySent===todayStr();
+  if(!disc.bot || !disc.chan){ toast("Primero configurá el bot en Ligas → Discord."); return; }
+  openModal('<div class="pview"><h2>Avisar partidos de hoy</h2>'
+    + (ms.length ? '<div class="hint">Se van a mandar '+ms.length+' mensaje'+(ms.length>1?'s':'')+' al canal, cada uno con las reacciones '+esc(disc.emojis||"(ninguna)")+':</div><pre class="dcpre">'+esc(ms.map(m => dayMessage(m, true)).join("\n"))+'</pre>'
+        + (ms.some(m => !(L(m.league)||{}).role) ? '<div class="hint warn">Alguna liga no tiene rol de Discord: se nombra sin etiquetar.</div>' : '')
+        + (again ? '<div class="hint warn">Hoy ya se mandó el aviso. Si lo mandás otra vez, van a quedar repetidos.</div>' : '')
+      : '<div class="empty">No hay partidos pendientes programados para hoy.</div>')
+    + '<div class="hint" id="daystat"></div>'
+    + '<div class="mfoot"><button type="button" class="btn ghost" data-act="close">Cancelar</button>'+(ms.length ? '<button type="button" class="btn" id="day-send">'+(again?'Mandar de nuevo':'Mandar')+'</button>' : '')+'</div></div>');
+  const btn = document.getElementById("day-send"); if(!btn) return;
+  btn.addEventListener("click", async () => {
+    if(busy) return; busy = true; btn.disabled = true; const st = document.getElementById("daystat"), emojis = parseEmojis(disc.emojis);
+    let sent = 0, reactFail = 0;
+    try{
+      for(const m of ms){
+        st.textContent = "Mandando "+(sent+1)+" de "+ms.length+"…";
+        const l = L(m.league), roles = l && l.role ? [String(l.role)] : [];
+        const msg = await dapi("POST", "/channels/"+disc.chan+"/messages", {content: dayMessage(m), allowed_mentions:{parse:[], roles}});
+        sent++;
+        for(const e of emojis){ try{ await dapi("PUT", "/channels/"+disc.chan+"/messages/"+msg.id+"/reactions/"+encodeURIComponent(e)+"/@me"); await sleep(300); }catch(err){ console.error(err); reactFail++; } }
+      }
+      try{ await setDoc(doc(db,"privado","discord"), {daySent: todayStr()}, {merge:true}); disc.daySent = todayStr(); }catch(e){}
+      busy = false; closeModal();
+      toast(sent+" aviso"+(sent>1?"s":"")+" mandado"+(sent>1?"s":"")+" a Discord"+(reactFail ? " · "+reactFail+" reacción(es) no se pudieron poner: revisá los emojis y el permiso Agregar reacciones." : "."));
+    }catch(err){
+      console.error(err); busy = false; btn.disabled = false;
+      const why = err.status===401 ? "El token del bot no es válido." : err.status===403 ? "El bot no tiene permiso en ese canal (ver canal, enviar mensajes, agregar reacciones)." : err.status===404 ? "No encontré el canal: revisá el ID." : (err instanceof TypeError ? "El navegador no pudo conectarse con Discord." : err.message);
+      st.textContent = (sent ? "Se mandaron "+sent+" de "+ms.length+". " : "")+"No se pudo seguir: "+why; st.className = "hint warn";
+    }
+  });
+}
+function botConfigForm(){
+  openModal('<form id="bcf"><h2>Bot de Discord</h2>'
+    + '<div class="hint">Sirve para mandar los avisos del día con reacciones (un webhook no puede reaccionar). Solo los capitanes pueden ver estos datos.</div>'
+    + '<label class="f">Token del bot<input type="password" id="f-btoken" autocomplete="off" placeholder="'+(disc.bot ? 'Guardado (dejalo vacío para no cambiarlo)' : 'Pegá el token')+'"></label>'
+    + '<label class="f">ID del canal de los avisos<input type="text" id="f-bchan" inputmode="numeric" autocomplete="off" value="'+esc(disc.chan)+'" placeholder="Ej: 1234567890123456789"></label>'
+    + '<label class="f">Reacciones (separadas por espacio)<input type="text" id="f-bemo" autocomplete="off" value="'+esc(disc.emojis)+'" placeholder="✅ 🟡 ❌"><span class="hint">Emojis comunes, o del servidor con el formato &lt;:nombre:id&gt;.</span></label>'
+    + '<div class="hint" id="bchint"></div>'+foot("")+'</form>');
+  document.getElementById("bcf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
+    const tok = document.getElementById("f-btoken").value.trim(), chan = document.getElementById("f-bchan").value.trim(), emo = document.getElementById("f-bemo").value.trim(), hint = document.getElementById("bchint");
+    if(!tok && !disc.bot){ hint.textContent = "Falta el token del bot."; hint.className = "hint warn"; return; }
+    if(!/^\d{15,25}$/.test(chan)){ hint.textContent = "El ID del canal son solo números (unos 18 o 19). En Discord: clic derecho en el canal → Copiar ID del canal."; hint.className = "hint warn"; return; }
+    busy = true; setSaving(true);
+    const data = {dayChannel: chan, dayEmojis: emo}; if(tok) data.botToken = tok;
+    try{ await setDoc(doc(db,"privado","discord"), data, {merge:true}); }
+    catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar.")); return; }
+    busy = false; if(tok) disc.bot = tok; disc.chan = chan; disc.emojis = emo; closeModal(); toast("Bot guardado"); render();
+  });
 }
 async function loadDiscord(){
   try{
     const [p, c] = await Promise.all([getDoc(doc(db,"privado","discord")), getDoc(doc(db,"club","discord"))]);
-    disc.hook = p.exists() ? (p.data().calWebhook || "") : "";
+    const pd = p.exists() ? p.data() : {};
+    disc.hook = pd.calWebhook || ""; disc.bot = pd.botToken || ""; disc.chan = pd.dayChannel || ""; disc.emojis = pd.dayEmojis!=null ? pd.dayEmojis : "✅ 🟡 ❌"; disc.daySent = pd.daySent || "";
     disc.msgId = c.exists() ? (c.data().calMsgId || "") : "";
   }catch(e){ console.error(e); }
   disc.loaded = true;
@@ -368,7 +440,7 @@ function discordConfigForm(){
     const url = document.getElementById("f-dchook").value.trim(), hint = document.getElementById("dchint");
     if(!webhookValido(url)){ hint.textContent = "Esa dirección no es un webhook de Discord. Tiene que empezar con https://discord.com/api/webhooks/"; hint.className = "hint warn"; return; }
     busy = true; setSaving(true);
-    try{ await setDoc(doc(db,"privado","discord"), {calWebhook: url}); }
+    try{ await setDoc(doc(db,"privado","discord"), {calWebhook: url}, {merge:true}); }
     catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar el webhook.")); return; }
     busy = false; const changed = url !== disc.hook; disc.hook = url; closeModal(); toast("Webhook guardado");
     syncDiscord(changed || !disc.msgId, true);
@@ -719,6 +791,7 @@ function leagueForm(l){
     + '<label class="f">Nombre<input type="text" id="f-lname" required maxlength="40" value="'+esc(l.name)+'" placeholder="Liga Argentina de Haxball"></label>'
     + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label>'
     + '<label class="f">Nombre corto (Discord)<input type="text" id="f-lshort" maxlength="20" value="'+esc(l.short||"")+'" placeholder="Ej: RF"></label>'
+    + '<label class="f">Rol de Discord (ID)<input type="text" id="f-lrole" inputmode="numeric" autocomplete="off" maxlength="25" value="'+esc(l.role||"")+'" placeholder="Ej: 1234567890123456789"></label>'
     + '<label class="f">Modalidad<select id="f-lgroup"><option value="">Sin modalidad</option>'+S.groups.map(g => '<option value="'+esc(g.id)+'"'+(l.group===g.id?' selected':'')+'>'+esc(g.name)+'</option>').join("")+'<option value="__new">+ Nueva modalidad…</option></select></label>'
     + '<label class="f" id="f-lgnew-wrap" hidden>Nombre de la nueva modalidad<input type="text" id="f-lgnew" maxlength="30" placeholder="Ej: x7"></label></div>'
     + '<label class="f">Link de la tabla de posiciones<input type="text" id="f-llink" autocomplete="off" maxlength="300" inputmode="url" value="'+esc(l.link||"")+'" placeholder="https://challenge.place/c/..."><span class="hint" id="llhint">Opcional. Pegá el link de la liga en challenge.place (o donde publiquen la tabla).</span></label>'
@@ -737,6 +810,9 @@ function leagueForm(l){
     if(gsel==="__new"){ const gn = document.getElementById("f-lgnew").value.trim(); if(!gn){ document.getElementById("f-lgnew").focus(); return; }
       const ex = S.groups.find(x => x.name.toLowerCase()===gn.toLowerCase()); if(ex) gsel = ex.id; else { newG = {id:uid(), name:gn}; gsel = newG.id; } }
     const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),short:document.getElementById("f-lshort").value.trim(),color,link};
+    const role = document.getElementById("f-lrole").value.trim().replace(/[<@&>]/g,"");
+    if(role && !/^\d{15,25}$/.test(role)){ toast("El rol de Discord tiene que ser el ID (solo números). Clic derecho en el rol → Copiar ID del rol."); document.getElementById("f-lrole").focus(); return; }
+    if(role) nl.role = role;
     if(gsel) nl.group = gsel;
     commit(n => { if(newG){ n.groups = n.groups || []; n.groups.push(newG); } const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
 }
@@ -814,6 +890,8 @@ document.addEventListener("click", e => {
   if(a==="l-edit") leagueForm(L(id));
   if(a==="club") clubForm();
   if(a==="dc-config") discordConfigForm();
+  if(a==="bot-config") botConfigForm();
+  if(a==="day-notice") dayNoticeForm();
   if(a==="dc-preview") discordPreview();
   if(a==="dc-sync") syncDiscord(false, true);
   if(a==="dc-new") syncDiscord(true, true);
