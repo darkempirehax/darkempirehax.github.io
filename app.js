@@ -14,7 +14,7 @@ const TZ = "America/Argentina/Buenos_Aires";
 const todayStr = () => new Intl.DateTimeFormat("en-CA",{timeZone:TZ}).format(new Date());
 const CAL_SLOTS = 5;
 const MAX_REC = 900 * 1024;
-const EMPTY = () => ({club:{name:"Dark Empire"}, leagues:[], players:[], matches:[]});
+const EMPTY = () => ({club:{name:"Dark Empire"}, groups:[], leagues:[], players:[], matches:[]});
 
 const app = document.getElementById("app");
 const modalHost = document.createElement("div"); document.body.appendChild(modalHost);
@@ -24,8 +24,9 @@ let loadError = null;
 let canWrite = false, user = null, busy = false;
 const disc = {hook:"", msgId:"", last:"", loaded:false};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
-try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.league = sv.league || "all"; ui.sort = sv.sort || "g"; } }catch(e){}
-function saveUi(){ try{ localStorage.setItem("hx_ui", JSON.stringify({league:ui.league, sort:ui.sort})); }catch(e){} }
+ui.leagues = []; ui.groups = []; ui.statMode = "liga"; ui.fOpen = false;   // filtros: vacío = todas
+try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.leagues = Array.isArray(sv.leagues) ? sv.leagues : []; ui.groups = Array.isArray(sv.groups) ? sv.groups : []; ui.statMode = sv.statMode==="grupo" ? "grupo" : "liga"; ui.sort = sv.sort || "g"; } }catch(e){}
+function saveUi(){ try{ localStorage.setItem("hx_ui", JSON.stringify({leagues:ui.leagues, groups:ui.groups, statMode:ui.statMode, sort:ui.sort})); }catch(e){} }
 function fromHash(){ const h = location.hash.slice(1); if(TABS.some(t => t[0]===h)) ui.tab = h; }
 fromHash();
 
@@ -52,7 +53,7 @@ if(!cfg.apiKey || !cfg.projectId){
     if(canWrite) loadDiscord();
   });
 }
-function normalize(d){ d = d || {}; return {club: d.club || {name:"Dark Empire"}, leagues: d.leagues || [], players: d.players || [], matches: d.matches || []}; }
+function normalize(d){ d = d || {}; return {club: d.club || {name:"Dark Empire"}, groups: d.groups || [], leagues: d.leagues || [], players: d.players || [], matches: d.matches || []}; }
 
 async function login(){
   try{ await signInWithPopup(auth, new GoogleAuthProvider()); }
@@ -76,7 +77,12 @@ function fmtDate(d){ if(!d) return "Sin fecha"; const x=new Date(d+"T12:00:00");
   return x.toLocaleDateString("es-AR",{weekday:"short",day:"2-digit",month:"2-digit"}).replace(",",""); }
 function kb(n){ return n>=1024*1024 ? (n/1024/1024).toFixed(1)+" MB" : Math.round(n/1024)+" KB"; }
 function res(m){ if(m.status!=="jugado") return null; if(m.df) return "DF"; const a=+m.gf||0, b=+m.gc||0; return a>b?"G":a<b?"P":"E"; }
-const inLeague = m => ui.league==="all" || m.league===ui.league;
+// Filtros: se ignoran las ligas/modalidades elegidas que ya no existen.
+const selLeagues = () => ui.leagues.filter(id => L(id));
+const selGroups = () => ui.groups.filter(id => S.groups.some(g => g.id===id));
+const inLeague = m => { const sl = selLeagues(); return !sl.length || sl.includes(m.league); };
+const inStats = m => { if(ui.statMode==="grupo"){ const sg = selGroups(); if(!sg.length) return true; const l = L(m.league); return !!l && sg.includes(l.group); } return inLeague(m); };
+const G = id => S.groups.find(g => g.id===id);
 function record(list){ const r={pj:0,g:0,e:0,p:0,df:0,gf:0,gc:0};
   list.forEach(m => { const x=res(m); if(!x) return; if(x==="DF"){ r.df++; return; } r.pj++; r[x==="G"?"g":x==="E"?"e":"p"]++; r.gf+=+m.gf||0; r.gc+=+m.gc||0; }); return r; }
 const key = m => (m.date||"9999-99-99")+" "+(m.time||"99:99");
@@ -121,12 +127,28 @@ function stateView(){
   return '<main class="gut" style="padding-block:40px"><div class="inner"><div class="state">'+body+'</div></div></main>';
 }
 const rec = (v,l,c) => '<div class="rec'+(c?' '+c:'')+'"><b>'+esc(v)+'</b><span>'+l+'</span></div>';
-function leagueChips(){
+function leagueChips(stats){
   if(!S.leagues.length) return "";
-  return '<div class="chips" role="group" aria-label="Filtrar por liga">'
-    + '<button class="chip" data-act="lg" data-id="all" aria-pressed="'+(ui.league==="all")+'">Todas</button>'
-    + S.leagues.map(l => '<button class="chip" data-act="lg" data-id="'+esc(l.id)+'" aria-pressed="'+(ui.league===l.id)+'"><span class="dot" style="--lg:'+esc(l.color)+'"></span>'+esc(l.name)+'</button>').join("")
-    + '</div>';
+  const mode = stats ? ui.statMode : "liga", sl = selLeagues(), sg = selGroups();
+  const sel = mode==="grupo" ? sg : sl;
+  const summary = mode==="grupo"
+    ? (sg.length ? 'Modalidad: '+sg.map(id => esc(G(id).name)).join(", ") : (stats ? 'Todas las modalidades' : ''))
+    : (sl.length ? sl.map(id => '<span class="dot" style="--lg:'+esc(L(id).color)+'"></span>'+esc(L(id).name)).join(", ") : 'Todas las ligas');
+  let h = '<div class="fwrap"><button class="btn ghost small" data-act="flt-toggle" aria-expanded="'+ui.fOpen+'">Filtrar'+(sel.length ? ' ('+sel.length+')' : '')+' ▾</button>'
+    + '<span class="fsum">'+summary+'</span>';
+  if(ui.fOpen){
+    h += '<div class="fpanel" role="dialog" aria-label="Filtrar">';
+    if(stats) h += '<div class="seg small fmode"><label><input type="radio" name="flt-mode" value="grupo"'+(mode==="grupo"?' checked':'')+'>Por modalidad</label><label><input type="radio" name="flt-mode" value="liga"'+(mode==="liga"?' checked':'')+'>Por liga</label></div>';
+    if(mode==="grupo"){
+      h += S.groups.length ? '<div class="flist">'+S.groups.map(g => { const n = S.leagues.filter(l => l.group===g.id).length;
+          return '<label class="fopt"><input type="checkbox" class="flt-g" value="'+esc(g.id)+'"'+(sg.includes(g.id)?' checked':'')+'> '+esc(g.name)+' <span class="hint">'+n+' liga'+(n===1?'':'s')+'</span></label>'; }).join("")+'</div>'
+        : '<div class="hint">Todavía no hay modalidades. '+(canWrite ? 'Creálas en <a href="#ligas">Ligas</a>.' : 'Las crean los capitanes en Ligas.')+'</div>';
+    } else {
+      h += '<div class="flist">'+S.leagues.map(l => '<label class="fopt"><input type="checkbox" class="flt-l" value="'+esc(l.id)+'"'+(sl.includes(l.id)?' checked':'')+'> <span class="dot" style="--lg:'+esc(l.color)+'"></span>'+esc(l.name)+'</label>').join("")+'</div>';
+    }
+    h += '<div class="acts"><button class="btn ghost small" data-act="flt-clear">Ver todas</button><button class="btn small" data-act="flt-toggle">Listo</button></div></div>';
+  }
+  return h + '</div>';
 }
 function startGuide(){
   return '<div class="empty"><b>Todavía no hay nada cargado.</b>'+(canWrite ?
@@ -136,9 +158,9 @@ function startGuide(){
 function vMatches(){
   const list = S.matches.filter(inLeague), up = upcoming(list), pl = played(list);
   let h = '<div class="bar">'+leagueChips()+(canWrite ? '<button class="btn" data-act="m-new"'+(S.leagues.length?'':' disabled title="Primero creá una liga"')+'>+ Partido</button>' : '')+'</div>';
-  if(ui.league!=="all" && tablaBtn(L(ui.league))) h += '<div class="acts">'+tablaBtn(L(ui.league))+'</div>';
+  if(selLeagues().length===1 && tablaBtn(L(selLeagues()[0]))) h += '<div class="acts">'+tablaBtn(L(selLeagues()[0]))+'</div>';
   if(!S.matches.length) return h + startGuide();
-  h += '<section class="sec"><h2>Próximos <small>'+up.length+'</small></h2>'+(up.length ? '<div class="list">'+up.map(matchRow).join("")+'</div>' : '<div class="empty">No hay partidos pendientes'+(ui.league!=="all"?" en esta liga":"")+'.</div>')+'</section>';
+  h += '<section class="sec"><h2>Próximos <small>'+up.length+'</small></h2>'+(up.length ? '<div class="list">'+up.map(matchRow).join("")+'</div>' : '<div class="empty">No hay partidos pendientes'+(selLeagues().length?" con este filtro":"")+'.</div>')+'</section>';
   h += '<section class="sec"><h2>Resultados <small>'+pl.length+'</small></h2>'+(pl.length ? '<div class="list">'+pl.map(matchRow).join("")+'</div>' : '<div class="empty">Todavía no hay resultados cargados.</div>')+'</section>';
   return h;
 }
@@ -215,12 +237,12 @@ function vCalendar(){
   return h;
 }
 function vStats(){
-  const t = stats(S.matches.filter(inLeague));
+  const t = stats(S.matches.filter(inStats));
   const rows = S.players.map(p => t[p.id]).filter(s => P(s.id).active!==false || s.pj>0);
   const k = ui.sort, val = (s) => k==="ga" ? s.g+s.a : k==="pp" ? (s.pa ? s.ps/s.pa : -1) : k==="ppm" ? (s.pm ? s.ps/s.pm : -1) : k==="avg" ? (s.pj ? s.g/s.pj : -1) : k==="avga" ? (s.pj ? (s.g+s.a)/s.pj : -1) : s[k];
   rows.sort((a,b) => k==="name" ? P(a.id).name.localeCompare(P(b.id).name)
     : (val(b)-val(a) || (b.g+b.a)-(a.g+a.a) || P(a.id).name.localeCompare(P(b.id).name)));
-  let h = '<div class="bar">'+leagueChips()+'</div>';
+  let h = '<div class="bar">'+leagueChips(true)+'</div>';
   if(!S.players.length) return h + '<div class="empty">'+(canWrite?'Agregá jugadores en <a href="#plantel">Plantel</a> y cargá resultados para ver las estadísticas.':'Todavía no hay jugadores cargados.')+'</div>';
   function top(f,label){ let best=0; rows.forEach(s => { best=Math.max(best,f(s)); });
     const ties = best ? rows.filter(s => f(s)===best).map(s => P(s.id).name) : [];
@@ -254,12 +276,35 @@ function vLeagues(){
   h += '<div class="grid">'+S.leagues.map(l => {
     const ms = S.matches.filter(m => m.league===l.id), r = record(ms), pend = ms.filter(m => m.status!=="jugado").length;
     const inner = '<h3><span class="dot" style="--lg:'+esc(l.color)+';width:12px;height:12px"></span>'+esc(l.name)+'</h3>'
-      + '<div class="sub">'+(l.note?esc(l.note)+' · ':'')+pend+' pendiente'+(pend===1?'':'s')+'</div>'
+      + '<div class="sub">'+(G(l.group)?'<span class="gtag">'+esc(G(l.group).name)+'</span> ':'')+(l.note?esc(l.note)+' · ':'')+pend+' pendiente'+(pend===1?'':'s')+'</div>'
       + '<div class="minis num"><span><b>'+r.pj+'</b> PJ</span><span><b>'+r.g+'-'+r.e+'-'+r.p+'</b> G-E-P</span>'+(r.df?'<span><b>'+r.df+'</b> DF</span>':'')+'</div>';
     const acts = tablaBtn(l) + (canWrite ? '<button class="btn ghost small" data-act="l-edit" data-id="'+esc(l.id)+'">Editar</button>' : '');
     return '<div class="card">'+inner+(acts?'<div class="acts">'+acts+'</div>':'')+'</div>';
   }).join("")+'</div>';
-  return h + discordSection();
+  return h + groupsSection() + discordSection();
+}
+function groupsSection(){
+  if(!canWrite && !S.groups.length) return "";
+  return '<section class="sec"><h2>Modalidades <small>para filtrar las estadísticas</small></h2>'
+    + '<div class="chips">'+S.groups.map(g => { const n = S.leagues.filter(l => l.group===g.id).length;
+        return canWrite ? '<button class="chip" data-act="g-edit" data-id="'+esc(g.id)+'">'+esc(g.name)+' <span class="hint">'+n+'</span></button>' : '<span class="chip">'+esc(g.name)+' <span class="hint">'+n+'</span></span>'; }).join("")
+    + (canWrite ? '<button class="chip" data-act="g-new">+ Modalidad</button>' : '')+'</div>'
+    + (canWrite ? '<div class="hint">Creá modalidades (por ejemplo x5 y x7) y marcá sus ligas tocando la modalidad. En Estadísticas vas a poder filtrar por modalidad.</div>' : '')+'</section>';
+}
+function groupForm(g){
+  const isNew = !g; g = g || {id:uid(), name:""};
+  const used = S.leagues.filter(l => l.group===g.id);
+  openModal('<form id="gf"><h2>'+(isNew?'Nueva modalidad':esc(g.name))+'</h2>'
+    + '<label class="f">Nombre<input type="text" id="f-gname" required maxlength="30" value="'+esc(g.name)+'" placeholder="Ej: x5, x7, Futsal"></label>'
+    + '<div class="filein"><span>Ligas de esta modalidad</span>'+(S.leagues.length ? '<div class="flist">'+S.leagues.map(l => { const other = l.group && l.group!==g.id && G(l.group);
+        return '<label class="fopt"><input type="checkbox" class="g-lg" value="'+esc(l.id)+'"'+(l.group===g.id?' checked':'')+'> <span class="dot" style="--lg:'+esc(l.color)+'"></span>'+esc(l.name)+(other ? ' <span class="hint">ahora en '+esc(other.name)+'</span>' : '')+'</label>'; }).join("")+'</div>'
+      + '<span class="hint">Marcá las ligas que pertenecen a esta modalidad. Si marcás una que está en otra, se pasa a esta.</span>' : '<span class="hint">Todavía no hay ligas.</span>')+'</div>'
+    + foot(isNew ? "" : (used.length ? "Las "+used.length+" ligas de esta modalidad quedan sin modalidad. ¿Borrarla?" : "¿Borrar esta modalidad?"))+'</form>');
+  onDelete = () => commit(n => { n.groups = (n.groups||[]).filter(x => x.id!==g.id); n.leagues.forEach(l => { if(l.group===g.id) delete l.group; }); }, "Modalidad borrada");
+  document.getElementById("gf").addEventListener("submit", e => { e.preventDefault(); const nm = document.getElementById("f-gname").value.trim(); if(!nm) return;
+    const picked = new Set([...document.querySelectorAll("#gf .g-lg:checked")].map(x => x.value));
+    commit(n => { n.groups = n.groups || []; const i = n.groups.findIndex(x => x.id===g.id); if(i<0) n.groups.push({id:g.id, name:nm}); else n.groups[i].name = nm;
+      n.leagues.forEach(l => { if(picked.has(l.id)) l.group = g.id; else if(l.group===g.id) delete l.group; }); }, isNew ? "Modalidad creada" : "Modalidad actualizada"); });
 }
 
 /* ---------- Discord: mensaje del calendario ---------- */
@@ -346,7 +391,7 @@ function setSaving(on){ const sb = modalHost.querySelector('button[type=submit]'
 
 function matchForm(m){
   const isNew = !m;
-  m = m || {id:uid(), league: ui.league!=="all" ? ui.league : (S.leagues[0]||{}).id, status:"pendiente", lineup:[]};
+  m = m || {id:uid(), league: selLeagues().length===1 ? selLeagues()[0] : (S.leagues[0]||{}).id, status:"pendiente", lineup:[]};
   const lu = {}; (m.lineup||[]).forEach(r => { lu[r.p]=r; });
   const roster = S.players.filter(p => p.active!==false || lu[p.id]).sort((a,b) => a.name.localeCompare(b.name));
   let removeRec = false;
@@ -673,7 +718,9 @@ function leagueForm(l){
   openModal('<form id="lf"><h2>'+(isNew?'Nueva liga':esc(l.name))+'</h2><div class="fields">'
     + '<label class="f">Nombre<input type="text" id="f-lname" required maxlength="40" value="'+esc(l.name)+'" placeholder="Liga Argentina de Haxball"></label>'
     + '<label class="f">Detalle<input type="text" id="f-lnote" maxlength="60" value="'+esc(l.note||"")+'" placeholder="División, torneo, temporada…"></label>'
-    + '<label class="f">Nombre corto (Discord)<input type="text" id="f-lshort" maxlength="20" value="'+esc(l.short||"")+'" placeholder="Ej: RF"></label></div>'
+    + '<label class="f">Nombre corto (Discord)<input type="text" id="f-lshort" maxlength="20" value="'+esc(l.short||"")+'" placeholder="Ej: RF"></label>'
+    + '<label class="f">Modalidad<select id="f-lgroup"><option value="">Sin modalidad</option>'+S.groups.map(g => '<option value="'+esc(g.id)+'"'+(l.group===g.id?' selected':'')+'>'+esc(g.name)+'</option>').join("")+'<option value="__new">+ Nueva modalidad…</option></select></label>'
+    + '<label class="f" id="f-lgnew-wrap" hidden>Nombre de la nueva modalidad<input type="text" id="f-lgnew" maxlength="30" placeholder="Ej: x7"></label></div>'
     + '<label class="f">Link de la tabla de posiciones<input type="text" id="f-llink" autocomplete="off" maxlength="300" inputmode="url" value="'+esc(l.link||"")+'" placeholder="https://challenge.place/c/..."><span class="hint" id="llhint">Opcional. Pegá el link de la liga en challenge.place (o donde publiquen la tabla).</span></label>'
     + '<div class="filein"><span>Color</span><div class="swatches" role="radiogroup" aria-label="Color">'+COLORS.map((c,i) => '<label class="swatch" style="--sw:'+c+'" title="'+c+'"><input type="radio" name="lc" id="lc-'+i+'" value="'+c+'"'+(c===l.color?' checked':'')+' aria-label="Color '+(i+1)+'"></label>').join("")
     + '<label class="swatch custom" title="Elegir otro color"><input type="radio" name="lc" id="lc-x" value="custom"'+(COLORS.includes(l.color)?'':' checked')+' aria-label="Otro color"><input type="color" id="f-lcolor" value="'+(COLORS.includes(l.color)||!/^#[0-9a-f]{6}$/i.test(l.color||"")?'#888888':esc(l.color))+'" aria-label="Elegir otro color"><span>Otro</span></label></div></div>'
@@ -681,12 +728,17 @@ function leagueForm(l){
     + foot(isNew||used ? "" : "¿Borrar esta liga?")+'</form>');
   const form=document.getElementById("lf");
   document.getElementById("f-lcolor").addEventListener("input", () => { document.getElementById("lc-x").checked = true; });
+  document.getElementById("f-lgroup").addEventListener("change", e => { const w = document.getElementById("f-lgnew-wrap"); w.hidden = e.target.value!=="__new"; if(!w.hidden) document.getElementById("f-lgnew").focus(); });
   onDelete = () => commit(n => { n.leagues=n.leagues.filter(x => x.id!==l.id); }, "Liga borrada");
   form.addEventListener("submit", e => { e.preventDefault(); const nm=document.getElementById("f-lname").value.trim(); if(!nm) return;
     const c=form.querySelector('input[name="lc"]:checked'); const pick = c && c.value==="custom" ? document.getElementById("f-lcolor").value : (c ? c.value : l.color); const color = /^#[0-9a-f]{6}$/i.test(pick) ? pick : l.color; let rawLink=document.getElementById("f-llink").value.trim(); if(rawLink && !/^[a-z]+:/i.test(rawLink)) rawLink="https://"+rawLink; const link=rawLink?safeUrl(rawLink):"";
     if(rawLink && !link){ const hh=document.getElementById("llhint"); hh.textContent="Ese link no es válido: tiene que empezar con https://"; hh.className="hint warn"; document.getElementById("f-llink").focus(); return; }
+    let gsel = document.getElementById("f-lgroup").value, newG = null;
+    if(gsel==="__new"){ const gn = document.getElementById("f-lgnew").value.trim(); if(!gn){ document.getElementById("f-lgnew").focus(); return; }
+      const ex = S.groups.find(x => x.name.toLowerCase()===gn.toLowerCase()); if(ex) gsel = ex.id; else { newG = {id:uid(), name:gn}; gsel = newG.id; } }
     const nl={id:l.id,name:nm,note:document.getElementById("f-lnote").value.trim(),short:document.getElementById("f-lshort").value.trim(),color,link};
-    commit(n => { const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
+    if(gsel) nl.group = gsel;
+    commit(n => { if(newG){ n.groups = n.groups || []; n.groups.push(newG); } const i=n.leagues.findIndex(x => x.id===nl.id); if(i<0) n.leagues.push(nl); else n.leagues[i]=nl; }, isNew?"Liga creada":"Liga actualizada"); });
 }
 function clubForm(){
   openModal('<form id="cfm"><h2>Nombre del club</h2><label class="f">Nombre<input type="text" id="f-club" required maxlength="40" value="'+esc(S.club.name)+'"></label>'+foot("")+'</form>');
@@ -741,7 +793,10 @@ document.addEventListener("click", e => {
   if(a==="del-ask"){ document.getElementById("cf").hidden=false; return; }
   if(a==="del-no"){ document.getElementById("cf").hidden=true; return; }
   if(a==="del-yes"){ if(onDelete) onDelete(); return; }
-  if(a==="lg"){ ui.league=id; saveUi(); render(); return; }
+  if(a==="flt-toggle"){ ui.fOpen = !ui.fOpen; render(); return; }
+  if(a==="flt-clear"){ if(ui.tab==="estadisticas" && ui.statMode==="grupo") ui.groups = []; else ui.leagues = []; saveUi(); render(); return; }
+  if(a==="g-new"){ if(canWrite) groupForm(null); return; }
+  if(a==="g-edit"){ if(canWrite) groupForm(G(id)); return; }
   if(a==="sort"){ ui.sort=id; saveUi(); render(); return; }
   if(a==="cal"){ if(id==="0") ui.cal = todayStr().slice(0,7); else { const [yy,mm]=ui.cal.split("-").map(Number); const dt=new Date(Date.UTC(yy,mm-1+Number(id),1)); ui.cal = dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0"); } render(); return; }
   if(a==="m-view"){ const m=S.matches.find(x => x.id===id); if(m) matchModal(m); return; }
@@ -764,8 +819,16 @@ document.addEventListener("click", e => {
   if(a==="dc-new") syncDiscord(true, true);
   if(a==="dc-copy"){ const t=document.getElementById("dcpre").textContent; navigator.clipboard.writeText(t).then(() => toast("Texto copiado"), () => { const r=document.createRange(); r.selectNodeContents(document.getElementById("dcpre")); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast("Seleccioné el texto: copialo con Ctrl+C"); }); }
 });
+document.addEventListener("change", e => {
+  const t = e.target; if(!t.classList) return;
+  if(t.classList.contains("flt-l")){ ui.leagues = [...document.querySelectorAll(".flt-l:checked")].map(x => x.value); saveUi(); render(); }
+  else if(t.classList.contains("flt-g")){ ui.groups = [...document.querySelectorAll(".flt-g:checked")].map(x => x.value); saveUi(); render(); }
+  else if(t.name==="flt-mode"){ ui.statMode = t.value; saveUi(); render(); }
+});
+// Cerrar el filtro al tocar fuera de él.
+document.addEventListener("pointerdown", e => { if(ui.fOpen && !e.target.closest(".fwrap") && !e.target.closest(".overlay")){ ui.fOpen = false; render(); } });
 document.addEventListener("keydown", e => { if(e.key==="Escape" && modalHost.innerHTML && !busy) closeModal(); });
-addEventListener("hashchange", () => { fromHash(); ui.open=null; render(); scrollTo(0,0); });
+addEventListener("hashchange", () => { fromHash(); ui.open=null; ui.fOpen=false; render(); scrollTo(0,0); });
 
 let toastT;
 function toast(msg){ let t=document.querySelector(".toast"); if(!t){ t=document.createElement("div"); t.className="toast"; t.setAttribute("role","status"); document.body.appendChild(t); }
