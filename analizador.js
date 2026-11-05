@@ -39,6 +39,8 @@ export function loadHaxball() {
  *   goals: [{team, scorer, assist, own, time}]  (scorer/assist/own = {id, name, team} o null)
  *   players: {id: {id, name, ticks: {1: n, 2: n}}}  (tiempo en cancha por equipo)
  *   passes: {nick: {done, tried}}  (pases acertados e intentados; los intentos solo se usan para el %)
+ *   starters: {1: [nicks], 2: [nicks]}  titulares;  deep: {nick: {1: n, 2: n}}  ticks como el más retrasado (arquero)
+ *   dur: duración en segundos;  players[id].first[team]: tick en que apareció en ese equipo
  *   ticks: duración en ticks (60 por segundo)
  */
 export async function analyzeReplay(bytes, { onProgress } = {}) {
@@ -47,7 +49,7 @@ export async function analyzeReplay(bytes, { onProgress } = {}) {
     let reader, g = null, touches = [], tick = 0, done = false;
     let lastKick = null; // para pases: última patada pendiente {name, team, game, tick}
     const games = [];
-    const newGame = () => { g = { goals: [], players: {}, passes: {}, ticks: 0, red: 0, blue: 0 }; games.push(g); touches = []; };
+    const newGame = () => { g = { goals: [], players: {}, passes: {}, ticks: 0, red: 0, blue: 0, dur: 0, starters: null, side: null, deep: {} }; games.push(g); touches = []; };
     const info = id => { const p = reader.state.getPlayer(id); return p ? { id, name: p.name, team: (p.team && p.team.id) || 0 } : null; };
     function touch(id) {
       const p = info(id); if (!p || !p.team) return;
@@ -94,11 +96,27 @@ export async function analyzeReplay(bytes, { onProgress } = {}) {
           const gs = reader.gameState; if (!gs) return;
           if (!g) newGame();
           if (gs.state !== 0 && gs.state !== 1) return; // 0 = saque, 1 = en juego
-          g.ticks++;
+          g.ticks++; g.dur = gs.timeElapsed || g.dur;
+          const deepest = { 1: null, 2: null };
           for (const p of reader.state.players) {
             const t = p.team && p.team.id; if (!t) continue;
-            const s = g.players[p.id] || (g.players[p.id] = { id: p.id, name: p.name, ticks: { 1: 0, 2: 0 } });
+            const s = g.players[p.id] || (g.players[p.id] = { id: p.id, name: p.name, ticks: { 1: 0, 2: 0 }, first: { 1: null, 2: null } });
             s.name = p.name; s.ticks[t]++;
+            if (s.first[t] == null) s.first[t] = g.ticks;
+            // Arquero: el jugador más cerca de su propio arco la mayor parte del tiempo.
+            if (g.side && gs.state === 1 && p.disc) { const v = p.disc.pos.x * g.side[t]; if (!deepest[t] || v > deepest[t].v) deepest[t] = { v, name: p.name }; }
+          }
+          for (const t of [1, 2]) if (deepest[t]) { const d = g.deep[deepest[t].name] || (g.deep[deepest[t].name] = { 1: 0, 2: 0 }); d[t]++; }
+          // Titulares: quiénes estaban en cada equipo al empezar; y de qué lado defiende cada uno.
+          if (!g.starters) {
+            const st = { 1: [], 2: [] }, xs = { 1: [], 2: [] };
+            for (const p of reader.state.players) { const t = p.team && p.team.id; if (!t) continue; st[t].push(p.name); if (p.disc) xs[t].push(p.disc.pos.x); }
+            if (st[1].length && st[2].length) {
+              g.starters = st;
+              const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+              const left1 = xs[1].length && xs[2].length ? avg(xs[1]) <= avg(xs[2]) : true; // el rojo suele defender a la izquierda
+              g.side = { 1: left1 ? -1 : 1, 2: left1 ? 1 : -1 };
+            }
           }
           if (onProgress && tick % 900 === 0 && reader.maxFrameNo) onProgress(Math.min(0.99, reader.getCurrentFrameNo() / reader.maxFrameNo));
         },

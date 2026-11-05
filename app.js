@@ -4,7 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { renderCalendario, webhookValido, avisosDelDia } from "./scripts/calendario-render.js?v=20261105";
-import { analyzeReplay, matchNick } from "./analizador.js?v=20261104";
+import { analyzeReplay, matchNick } from "./analizador.js?v=20261105";
 
 "use strict";
 const COLORS = ["#3a6fd8","#5aa9f0","#22b8cf","#1f9a8a","#2fbf71","#5f7f2e","#a3c94a","#e8c23a","#c48a12","#d0712b","#d4513f","#b3263e","#e04f86","#c2508f","#7b5cd6","#a77ef0","#8d6e63","#9ea7b3","#f1f0ec"];
@@ -189,9 +189,128 @@ function matchInfo(m){
       h += '<dl><dt>Goles</dt><dd>'+(list("g")||"—")+'</dd><dt>Asistencias</dt><dd>'+(list("a")||"—")+'</dd><dt>Figura</dt><dd>'+(m.mvp?esc(pname(m.mvp)):"—")+'</dd><dt>Jugaron</dt><dd>'+(pj||"—")+'</dd>'+(m.notes?'<dt>Notas</dt><dd>'+esc(m.notes)+'</dd>':'')+'</dl>';
     } else if(m.notes){ h += '<div>'+esc(m.notes)+'</div>'; }
     if(m.rec) h += '<div class="recbox"><button class="btn small" data-act="rec-dl" data-id="'+esc(m.id)+'">Descargar grabación ('+kb(m.rec.size||0)+')</button><span class="hint">Para verla, abrila en <a href="https://www.haxball.com/replay" target="_blank" rel="noopener">haxball.com/replay</a>.</span></div>';
-    if(canWrite) h += '<div class="acts"><button class="btn small ghost" data-act="m-edit" data-id="'+esc(m.id)+'">'+(r?'Editar resultado':'Cargar resultado / editar')+'</button></div>';
+    if(canWrite) h += '<div class="acts"><button class="btn small ghost" data-act="m-edit" data-id="'+esc(m.id)+'">'+(r?'Editar resultado':'Cargar resultado / editar')+'</button>'+(r && r!=="DF" && m.rec ? '<button class="btn small ghost" data-act="m-report" data-id="'+esc(m.id)+'">Informe</button>' : '')+'</div>';
   if(!h) h = '<div class="hint">'+(r ? 'Sin detalles cargados.' : 'Partido programado.')+'</div>';
   return h;
+}
+/* ---------- Informe del partido (texto para Discord) ---------- */
+const fmtMS = t => { t = Math.max(0, Math.round(t||0)); return Math.floor(t/60)+":"+String(t%60).padStart(2,"0"); };
+const dmd = x => String(x||"").trim().replace(/[\\*_`~|]/g, "\\$&");   // escapar formato de Discord en los nicks
+function reportData(games){
+  const inc = games.map(g => g.ticks >= 3600 || g.goals.length > 0); if(!inc.some(Boolean)) games.forEach((g,i) => inc[i] = true);
+  const pool = S.players.map(p => ({id:p.id, name:p.name, aliases:p.aliases||[]}));
+  const teamOf = pl => pl.ticks[1] >= pl.ticks[2] ? 1 : 2;
+  const ours = [], sure = [];
+  games.forEach((g,i) => { const c = {1:0, 2:0}; Object.values(g.players).forEach(pl => { const r = matchNick(pl.name, pool); if(r) c[teamOf(pl)] += r.kind==="memoria" ? 2 : 1; });
+    ours[i] = c[2] > c[1] ? 2 : 1; sure[i] = c[1] !== c[2]; });
+  games.forEach((g,i) => { if(sure[i]) return; const j = sure.findIndex(Boolean); if(j<0) return;
+    const set = new Set(Object.values(games[j].players).filter(pl => teamOf(pl)===ours[j]).map(pl => pl.name)), c = {1:0, 2:0};
+    Object.values(g.players).forEach(pl => { if(set.has(pl.name)) c[teamOf(pl)]++; }); if(c[1]!==c[2]) ours[i] = c[2] > c[1] ? 2 : 1; });
+  const side = (who) => {   // who: "us" | "them"
+    const colorAt = i => who==="us" ? ours[i] : 3 - ours[i];
+    const o = {starters: [], players: {}, goals: {}, assists: {}, og: {}, own: 0, gk: {}, gf: 0, firstConceded: null, total: 0};
+    let offset = 0, startersSet = false;
+    games.forEach((g,i) => { if(!inc[i]) return; const c = colorAt(i);
+      if(!startersSet && g.starters){ o.starters = g.starters[c].slice(); startersSet = true; }
+      Object.values(g.players).forEach(pl => { if(teamOf(pl)!==c || pl.ticks[c] < 180) return; o.players[pl.name] = (o.players[pl.name]||0) + pl.ticks[c]; });
+      Object.entries(g.deep||{}).forEach(([n,d]) => { if(d[c]) o.gk[n] = (o.gk[n]||0) + d[c]; });
+      g.goals.forEach(x => {
+        if(x.team===c){ o.gf++; if(x.scorer) o.goals[x.scorer.name] = (o.goals[x.scorer.name]||0) + 1; if(!x.scorer && x.own) o.og[x.own.name] = (o.og[x.own.name]||0) + 1; if(x.assist) o.assists[x.assist.name] = (o.assists[x.assist.name]||0) + 1; }
+        else if(o.firstConceded==null) o.firstConceded = offset + (x.time||0);
+      });
+      offset += g.dur || g.ticks/60;
+    });
+    o.total = offset;
+    o.starters = o.starters.filter(n => o.players[n] != null || true);
+    o.subs = Object.keys(o.players).filter(n => !o.starters.includes(n)).sort((a,b) => o.players[b]-o.players[a]);
+    o.gkAuto = Object.keys(o.gk).sort((a,b) => o.gk[b]-o.gk[a])[0] || o.starters[0] || "";
+    o.valla = o.firstConceded==null ? o.total : o.firstConceded;
+    return o;
+  };
+  return {us: side("us"), them: side("them")};
+}
+function reportText(D, f){
+  const E1 = f.ourEmoji ? f.ourEmoji+" " : "", E2 = f.rivEmoji ? f.rivEmoji+" " : "";
+  const lineup = (o, gk) => { const st = o.starters.slice(); const i = st.indexOf(gk); if(i>0){ st.splice(i,1); st.unshift(gk); } return st.map(dmd).join(" - "); };
+  const cnt = obj => Object.entries(obj).sort((a,b) => b[1]-a[1]).map(([n,k]) => dmd(n)+" x"+k).join(" ") || "❌";
+  const block = (o, E, gk) => [
+    "**⚽ `GOLES` "+E+":** "+([Object.entries(o.goals).sort((a,b) => b[1]-a[1]).map(([n,k]) => dmd(n)+" x"+k).join(" "), Object.entries(o.og).map(([n,k]) => dmd(n)+" OG"+(k>1?" x"+k:"")).join(" ")].filter(Boolean).join(" ") || "❌"),
+    "**🎩 `ASISTENCIAS` "+E+":** "+cnt(o.assists),
+    "🥅 **`VALLAS` "+E+":** "+(gk ? dmd(gk)+" " : "")+fmtMS(o.valla)];
+  const who = n => D.us.players[n]!=null || D.us.starters.includes(n) ? f.ourEmoji : f.rivEmoji;
+  const L = [];
+  L.push("-#  "+(f.compEmoji ? f.compEmoji+":" : "")+"__"+(f.round ? f.round+"  - " : "")+f.title+"__");
+  L.push("# ** "+E1+" `"+f.ourName+" "+D.us.gf+" - "+D.them.gf+" "+f.rivName+"` "+(f.rivEmoji||"")+" **");
+  L.push("-# **`FORMACIONES`**");
+  L.push(E1+"*"+lineup(D.us, f.gkUs)+"*"); L.push("-# cambios: "+(D.us.subs.map(dmd).join(" - ") || "❌"));
+  L.push(E2+"*"+lineup(D.them, f.gkThem)+"*"); L.push("-# cambios: "+(D.them.subs.map(dmd).join(" - ") || "❌"));
+  L.push("");
+  L.push(...block(D.us, (f.ourEmoji||"").trim(), f.gkUs)); L.push("");
+  L.push(...block(D.them, (f.rivEmoji||"").trim(), f.gkThem)); L.push("");
+  L.push("🏅 **`FIGURA:`** "+(f.figura ? dmd(f.figura)+" "+(who(f.figura)||"") : "❌"));
+  L.push("👏 **`DESTACADOS:`** "+(f.dest.length ? f.dest.map(n => dmd(n)+" "+(who(n)||"")).join(" - ") : "❌"));
+  L.push("");
+  L.push("⚠️ **`INCIDENTE:`** *"+(f.incidente || "Ninguna")+"*");
+  L.push("");
+  L.push("**📹 `VIDEO:`** "+(f.video||""));
+  return L.join("\n").replace(/[ ]+\n/g, "\n");
+}
+async function reportModal(m){
+  if(!m.rec){ toast("Este partido no tiene grabación guardada."); return; }
+  openModal('<div class="pview"><h2>Informe · vs '+esc(m.rival)+'</h2><div id="repbody"><div class="anbox"><b>Analizando la grabación…</b> <span id="repprog">0%</span></div></div></div>');
+  let D;
+  try{
+    const snap = await getDoc(doc(db,"grabaciones",m.rec.id)); if(!snap.exists()) throw new Error("No se encontró la grabación guardada.");
+    const games = await analyzeReplay(snap.data().data.toUint8Array(), {onProgress: p => { const e = document.getElementById("repprog"); if(e) e.textContent = Math.round(p*100)+"%"; }});
+    if(!games.length) throw new Error("No encontré ningún partido jugado en esa grabación.");
+    D = reportData(games);
+  }catch(err){ console.error(err); const b = document.getElementById("repbody"); if(b) b.innerHTML = '<div class="hint warn">'+esc(err.message||"No se pudo analizar la grabación.")+'</div><div class="mfoot"><button type="button" class="btn" data-act="close">Cerrar</button></div>'; return; }
+  const body = document.getElementById("repbody"); if(!body) return;
+  const l = L(m.league) || {}, rp = m.report || {};
+  const allNicks = [...new Set([...D.us.starters, ...Object.keys(D.us.players), ...D.them.starters, ...Object.keys(D.them.players)])];
+  let figDefault = rp.figura || "";
+  if(!figDefault && m.mvp){ const p = P(m.mvp); if(p) figDefault = [...D.us.starters, ...Object.keys(D.us.players)].find(n => { const r = matchNick(n, [{id:p.id, name:p.name, aliases:p.aliases||[]}]); return r && r.score >= 0.84; }) || ""; }
+  const f = {compEmoji: l.repEmoji||"", title: l.repTitle||l.name||"", round: m.round||"", ourName: l.repTeam||"Dark Empire", ourEmoji: l.repTeamEmoji||"",
+    rivName: m.rival||"", rivEmoji: m.rivalEmoji||"", gkUs: rp.gkUs||D.us.gkAuto, gkThem: rp.gkThem||D.them.gkAuto, figura: figDefault,
+    dest: (rp.dest||[]).filter(n => allNicks.includes(n)), incidente: rp.incidente||"Ninguna", video: rp.video||""};
+  const nickOpts = (list, sel, none) => (none ? '<option value="">'+none+'</option>' : '')+list.map(n => '<option'+(n===sel?' selected':'')+'>'+esc(n)+'</option>').join("");
+  const usList = [...new Set([...D.us.starters, ...Object.keys(D.us.players)])], themList = [...new Set([...D.them.starters, ...Object.keys(D.them.players)])];
+  body.innerHTML = '<div class="fields">'
+    + '<label class="f">Emoji de la competición<input type="text" autocomplete="off" id="r-ce" value="'+esc(f.compEmoji)+'" placeholder="<:ChampionsLeague:…>"></label>'
+    + '<label class="f">Competición<input type="text" autocomplete="off" id="r-ti" value="'+esc(f.title)+'" placeholder="Nations League | 1ra Edición x7"></label>'
+    + '<label class="f">Fase / ronda<input type="text" autocomplete="off" id="r-ro" value="'+esc(f.round)+'" placeholder="Semifinal"></label>'
+    + '<label class="f">Nuestro nombre en esta liga<input type="text" autocomplete="off" id="r-on" value="'+esc(f.ourName)+'"></label>'
+    + '<label class="f">Nuestro emoji<input type="text" autocomplete="off" id="r-oe" value="'+esc(f.ourEmoji)+'" placeholder="<:juventus:…>"></label>'
+    + '<label class="f">Rival<input type="text" autocomplete="off" id="r-rn" value="'+esc(f.rivName)+'"></label>'
+    + '<label class="f">Emoji del rival<input type="text" autocomplete="off" id="r-re" value="'+esc(f.rivEmoji)+'" placeholder="<:Atleticomadrid:…>"></label>'
+    + '<label class="f">Nuestro arquero<select id="r-gu">'+nickOpts(usList, f.gkUs)+'</select></label>'
+    + '<label class="f">Arquero rival<select id="r-gt">'+nickOpts(themList, f.gkThem)+'</select></label>'
+    + '<label class="f">Figura<select id="r-fi">'+nickOpts(allNicks, f.figura, "—")+'</select></label>'
+    + '<label class="f">Incidente<input type="text" autocomplete="off" id="r-in" value="'+esc(f.incidente)+'"></label>'
+    + '<label class="f">Video<input type="text" autocomplete="off" id="r-vi" value="'+esc(f.video)+'" placeholder="Link del video"></label></div>'
+    + '<div class="filein"><span>Destacados</span><div class="chips poschk">'+allNicks.map((n,i) => '<label class="chip"><input type="checkbox" class="r-de" value="'+esc(n)+'"'+(f.dest.includes(n)?' checked':'')+'>'+esc(n)+'</label>').join("")+'</div></div>'
+    + '<div class="hint">Los emojis del servidor se pegan como &lt;:nombre:id&gt;: en Discord escribí \\:nombre: y copiá lo que aparece. Las vallas son el tiempo que pasó hasta el primer gol recibido.</div>'
+    + '<textarea id="r-out" class="dcpre" readonly rows="14"></textarea>'
+    + '<div class="mfoot"><button type="button" class="btn ghost" id="r-save" style="margin-right:auto">Guardar datos</button><button type="button" class="btn ghost" data-act="close">Cerrar</button><button type="button" class="btn" id="r-copy">Copiar texto</button></div>';
+  const $ = id => document.getElementById(id);
+  const read = () => { f.compEmoji=$("r-ce").value.trim(); f.title=$("r-ti").value.trim(); f.round=$("r-ro").value.trim(); f.ourName=$("r-on").value.trim(); f.ourEmoji=$("r-oe").value.trim();
+    f.rivName=$("r-rn").value.trim(); f.rivEmoji=$("r-re").value.trim(); f.gkUs=$("r-gu").value; f.gkThem=$("r-gt").value; f.figura=$("r-fi").value;
+    f.incidente=$("r-in").value.trim(); f.video=$("r-vi").value.trim(); f.dest=[...body.querySelectorAll(".r-de:checked")].map(x => x.value); };
+  const upd = () => { read(); $("r-out").value = reportText(D, f); };
+  body.addEventListener("input", upd); body.addEventListener("change", upd); upd();
+  // Guarda lo que se completó (liga y partido) sin cerrar la ventana: así la próxima vez ya aparece.
+  async function saveRep(loud){ read();
+    try{ await runTransaction(db, async tx => { const snap = await tx.get(mainRef); const n = JSON.parse(JSON.stringify(normalize(snap.exists() ? snap.data() : EMPTY())));
+        const lg = n.leagues.find(x => x.id===m.league); if(lg){ lg.repEmoji=f.compEmoji; lg.repTitle=f.title; lg.repTeam=f.ourName; lg.repTeamEmoji=f.ourEmoji; }
+        const mm = n.matches.find(x => x.id===m.id); if(mm){ mm.round=f.round; mm.rivalEmoji=f.rivEmoji; mm.report={gkUs:f.gkUs, gkThem:f.gkThem, figura:f.figura, dest:f.dest, incidente:f.incidente, video:f.video}; }
+        tx.set(mainRef, JSON.parse(JSON.stringify(n))); });
+      if(loud) toast("Datos del informe guardados"); scheduleDiscord();
+    }catch(err){ console.error(err); if(loud) toast(errMsg(err, "No se pudo guardar.")); }
+  }
+  $("r-copy").addEventListener("click", () => { const t = $("r-out").value; saveRep(false);
+    const fallback = () => { $("r-out").select(); toast("Seleccioné el texto: copialo con Ctrl+C"); };
+    try{ navigator.clipboard.writeText(t).then(() => toast("Informe copiado: pegalo en Discord"), fallback); }catch(e){ fallback(); } });
+  $("r-save").addEventListener("click", () => saveRep(true));
 }
 function matchModal(m){
   const d = m.date ? new Date(m.date+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"}) : "Sin fecha";
@@ -863,6 +982,7 @@ document.addEventListener("click", e => {
   if(a==="g-edit"){ if(canWrite) groupForm(G(id)); return; }
   if(a==="sort"){ ui.sort=id; saveUi(); render(); return; }
   if(a==="cal"){ if(id==="0") ui.cal = todayStr().slice(0,7); else { const [yy,mm]=ui.cal.split("-").map(Number); const dt=new Date(Date.UTC(yy,mm-1+Number(id),1)); ui.cal = dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0"); } render(); return; }
+  if(a==="m-report"){ const m=S.matches.find(x => x.id===id); if(m && canWrite) reportModal(m); return; }
   if(a==="m-view"){ const m=S.matches.find(x => x.id===id); if(m) matchModal(m); return; }
   if(a==="m-open"){ ui.open = ui.open===id ? null : id; render(); return; }
   if(a==="rec-dl"){ const m = S.matches.find(x => x.id===id); if(m && m.rec) downloadRec(m); return; }
