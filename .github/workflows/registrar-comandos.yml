@@ -1,0 +1,25 @@
+name: Registrar comandos del bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: "Application ID del bot (portal de Discord → General Information)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  registrar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Registrar comandos de barra en Discord
+        run: node scripts/registrar-comandos.mjs
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          APP_ID: ${{ inputs.app_id }}
