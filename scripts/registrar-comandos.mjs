@@ -18,6 +18,11 @@ const commands = [
   { name: "horoscopo", description: "Horóscopo haxballero del día", options: [jugador("jugador", "Jugador del plantel (vacío = al azar)")] },
   { name: "goleadores", description: "Top 5 de goleadores del club" },
   { name: "asistidores", description: "Top 5 de asistidores del club" },
+  { name: "host", description: "Manda por MD el link y la pw del ofi a los jugadores de una liga (cuerpo técnico)", dm_permission: false, options: [
+    { type: 3, name: "link", description: "Link del host de Haxball", required: true, max_length: 200 },
+    { type: 3, name: "pw", description: "Contraseña del host", required: true, max_length: 50 },
+    { type: 3, name: "liga", description: "Liga (se lo manda a los que tienen su rol)", required: true, autocomplete: true },
+  ] },
 ];
 
 const r = await fetch(`https://discord.com/api/v10/applications/${APP}/commands`, {
