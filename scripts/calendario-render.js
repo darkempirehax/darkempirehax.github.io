@@ -62,9 +62,11 @@ export function avisosDelDia(data, hoy) {
       const role = l && /^\d{15,25}$/.test(String(l.role || "")) ? String(l.role) : "";
       const nombre = l ? limpio(l.short || l.name) : "SIN LIGA";
       const base = hora(m.time) + " ";
+      const ronda = String(m.round || "").replace(/[`*_~|\\@<>]/g, "").replace(/\s+/g, " ").trim();
+      const fin = " VS " + limpio(m.rival) + (ronda ? " - " + ronda : "");   // ej.: VS BOCA - Fecha 3
       return {
-        content: base + (role ? "<@&" + role + ">" : nombre) + " VS " + limpio(m.rival),
-        preview: base + (role ? "@" + (l.name || nombre) : nombre) + " VS " + limpio(m.rival),
+        content: base + (role ? "<@&" + role + ">" : nombre) + fin,
+        preview: base + (role ? "@" + (l.name || nombre) : nombre) + fin,
         roles: role ? [role] : [],
       };
     });
