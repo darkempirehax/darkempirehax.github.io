@@ -3,7 +3,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, runTransaction, Bytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { renderCalendario, webhookValido, avisosDelDia } from "./scripts/calendario-render.js?v=20261109";
+import { renderCalendario, webhookValido, avisosDelDia } from "./scripts/calendario-render.js?v=20261112";
 import { analyzeReplay, matchNick } from "./analizador.js?v=20261105";
 
 "use strict";
