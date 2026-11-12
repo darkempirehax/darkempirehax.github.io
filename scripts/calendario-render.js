@@ -22,11 +22,13 @@ function hora(t) {
   return (mi === "00" ? String(+h) : String(+h) + ":" + mi) + "HS";
 }
 function limpio(s) { return String(s || "").replace(/[`*_~|\\@<>]/g, "").replace(/\s+/g, " ").trim().toUpperCase(); }
+// " - Fecha 3" si el partido tiene fecha/fase cargada (se escribe tal cual, sin mayúsculas).
+function ronda(m) { const r = String((m && m.round) || "").replace(/[`*_~|\\@<>]/g, "").replace(/\s+/g, " ").trim(); return r ? " - " + r : ""; }
 
 export function renderCalendario(data, hoy) {
   const leagues = (data && data.leagues) || [], matches = (data && data.matches) || [];
   const liga = id => { const l = leagues.find(x => x.id === id); return l ? limpio(l.short || l.name) : "SIN LIGA"; };
-  const vs = m => `${liga(m.league)} VS ${limpio(m.rival)}`;
+  const vs = m => `${liga(m.league)} VS ${limpio(m.rival)}${ronda(m)}`;
   const porJugar = matches.filter(m => m.status !== "jugado");
   const out = ["**`CALENDARIO DE PARTIDOS OFICIALES:`**", ""];
   // Desde hoy hasta el último día con un partido programado.
@@ -62,8 +64,7 @@ export function avisosDelDia(data, hoy) {
       const role = l && /^\d{15,25}$/.test(String(l.role || "")) ? String(l.role) : "";
       const nombre = l ? limpio(l.short || l.name) : "SIN LIGA";
       const base = hora(m.time) + " ";
-      const ronda = String(m.round || "").replace(/[`*_~|\\@<>]/g, "").replace(/\s+/g, " ").trim();
-      const fin = " VS " + limpio(m.rival) + (ronda ? " - " + ronda : "");   // ej.: VS BOCA - Fecha 3
+      const fin = " VS " + limpio(m.rival) + ronda(m);   // ej.: VS BOCA - Fecha 3
       return {
         content: base + (role ? "<@&" + role + ">" : nombre) + fin,
         preview: base + (role ? "@" + (l.name || nombre) : nombre) + fin,
