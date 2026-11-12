@@ -30,7 +30,6 @@ if (res.status === 404) fail("Todavía no hay datos cargados en la página.");
 if (!res.ok) fail(`No se pudo leer Firebase (${res.status}): ${await res.text()}`);
 const data = decodeFields((await res.json()).fields || {});
 const leagues = data.leagues || [], matches = data.matches || [];
-const clubName = (data.club && data.club.name) || "Dark Empire";
 
 const delDia = matches
   .filter(m => m.date === hoy && m.status !== "jugado")
@@ -42,15 +41,15 @@ console.log(`Fecha ${hoy}: ${delDia.length} partido(s).`);
 if (!delDia.length && !MANUAL) { console.log("No hay partidos hoy: no se manda nada."); process.exit(0); }
 
 // 4. Armar el mensaje.
+const SALUDO = "Hola amigos de dehc buenos dias, les recuerdo sus ofis de hoy:";
 const lines = delDia.map(m => {
   const l = leagues.find(x => x.id === m.league);
   const extra = [l && l.name, m.round].filter(Boolean).join(" · ");
   return `**${m.time || "Hora a confirmar"}** · vs **${clean(m.rival)}**${extra ? `\n${clean(extra)}` : ""}`;
 });
 const payload = {
-  username: clubName,
-  ...(PAGE ? { avatar_url: `${PAGE}/favicon.png` } : {}),
-  content: mentionText() || undefined,
+  // Sin username/avatar: usa el nombre y la foto que tiene el webhook en Discord.
+  content: [mentionText(), SALUDO].filter(Boolean).join(" "),
   allowed_mentions: allowedMentions(),
   embeds: [{
     title: delDia.length ? `Partidos de hoy · ${fechaTxt}` : `Prueba · ${fechaTxt}`,
