@@ -526,7 +526,7 @@ async function syncDiscord(forceNew, loud){
       if(r.ok) edited = true; else if(r.status!==404) throw new Error("Discord "+r.status);
     }
     if(!edited){
-      const post = JSON.stringify({content, allowed_mentions:{parse:[]}, username: (S.club && S.club.name) || "Dark Empire", avatar_url: new URL("favicon.png", location.href).href});
+      const post = JSON.stringify({content, allowed_mentions:{parse:[]}}); // sin username/avatar: usa el nombre y la foto que tiene el webhook en Discord
       const r = await fetch(disc.hook+"?wait=true", {method:"POST", headers:{"Content-Type":"application/json"}, body: post});
       if(!r.ok) throw new Error("Discord "+r.status);
       const j = await r.json(); disc.msgId = String(j.id);
