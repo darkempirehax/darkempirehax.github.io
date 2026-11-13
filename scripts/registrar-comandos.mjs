@@ -18,6 +18,9 @@ const commands = [
   { name: "horoscopo", description: "Horóscopo haxballero del día", options: [jugador("jugador", "Jugador del plantel (vacío = al azar)")] },
   { name: "goleadores", description: "Top 5 de goleadores del club" },
   { name: "asistidores", description: "Top 5 de asistidores del club" },
+  { name: "miembros", description: "Lista etiquetando a todos los que tienen un rol (cuerpo técnico)", dm_permission: false, options: [
+    { type: 8, name: "rol", description: "El rol", required: true },
+  ] },
   { name: "host", description: "Manda por MD el link y la pw del ofi a los jugadores de una liga (cuerpo técnico)", dm_permission: false, options: [
     { type: 3, name: "link", description: "Link del host de Haxball", required: true, max_length: 200 },
     { type: 3, name: "liga", description: "Liga (se lo manda a los que tienen su rol)", required: true, autocomplete: true },
