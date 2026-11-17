@@ -22,7 +22,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
-const disc = {hook:"", msgId:"", last:"", loaded:false, gh:"", chan:"", emojis:"✅ 🟡 ❌", daySent:""};
+const disc = {hook:"", msgId:"", last:"", loaded:false, gh:"", chan:"", emojis:"✅ 🟡 ❌", daySent:"", mr:""};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 ui.leagues = []; ui.groups = []; ui.statMode = "liga"; ui.fOpen = false;   // filtros: vacío = todas
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.leagues = Array.isArray(sv.leagues) ? sv.leagues : []; ui.groups = Array.isArray(sv.groups) ? sv.groups : []; ui.statMode = sv.statMode==="grupo" ? "grupo" : "liga"; ui.sort = sv.sort || "g"; } }catch(e){}
@@ -188,7 +188,11 @@ function matchInfo(m){
       const pj = (m.lineup||[]).map(x => esc(pname(x.p))).join(", ");
       h += '<dl><dt>Goles</dt><dd>'+(list("g")||"—")+'</dd><dt>Asistencias</dt><dd>'+(list("a")||"—")+'</dd><dt>Figura</dt><dd>'+(m.mvp?esc(pname(m.mvp)):"—")+'</dd><dt>Jugaron</dt><dd>'+(pj||"—")+'</dd>'+(m.notes?'<dt>Notas</dt><dd>'+esc(m.notes)+'</dd>':'')+'</dl>';
     } else if(m.notes){ h += '<div>'+esc(m.notes)+'</div>'; }
-    if(m.rec) h += '<div class="recbox"><button class="btn small" data-act="rec-dl" data-id="'+esc(m.id)+'">Descargar grabación ('+kb(m.rec.size||0)+')</button><span class="hint">Para verla, abrila en <a href="https://www.haxball.com/replay" target="_blank" rel="noopener">haxball.com/replay</a>.</span></div>';
+    const rurl = safeUrl(m.replayUrl);
+    if(m.rec || rurl) h += '<div class="recbox">'+(rurl ? '<a class="btn small" href="'+esc(rurl)+'" target="_blank" rel="noopener">Ver replay online ↗</a>' : '')
+      + (m.rec ? '<button class="btn small'+(rurl?' ghost':'')+'" data-act="rec-dl" data-id="'+esc(m.id)+'">Descargar grabación ('+kb(m.rec.size||0)+')</button>' : '')
+      + (canWrite && m.rec && !rurl && disc.mr ? '<button class="btn small ghost" data-act="mr-up" data-id="'+esc(m.id)+'">Subir a MrREPLAY</button>' : '')
+      + (!rurl ? '<span class="hint">Para verla, abrila en <a href="https://www.haxball.com/replay" target="_blank" rel="noopener">haxball.com/replay</a>.</span>' : '')+'</div>';
     if(canWrite) h += '<div class="acts"><button class="btn small ghost" data-act="m-edit" data-id="'+esc(m.id)+'">'+(r?'Editar resultado':'Cargar resultado / editar')+'</button>'+(r && r!=="DF" && m.rec ? '<button class="btn small ghost" data-act="m-report" data-id="'+esc(m.id)+'">Informe</button>' : '')+'</div>';
   if(!h) h = '<div class="hint">'+(r ? 'Sin detalles cargados.' : 'Partido programado.')+'</div>';
   return h;
@@ -272,7 +276,7 @@ async function reportModal(m){
   if(!figDefault && m.mvp){ const p = P(m.mvp); if(p) figDefault = [...D.us.starters, ...Object.keys(D.us.players)].find(n => { const r = matchNick(n, [{id:p.id, name:p.name, aliases:p.aliases||[]}]); return r && r.score >= 0.84; }) || ""; }
   const f = {compEmoji: l.repEmoji||"", title: l.repTitle||l.name||"", round: m.round||"", ourName: l.repTeam||"Dark Empire", ourEmoji: l.repTeamEmoji||"",
     rivName: m.rival||"", rivEmoji: m.rivalEmoji||"", gkUs: rp.gkUs||D.us.gkAuto, gkThem: rp.gkThem||D.them.gkAuto, figura: figDefault,
-    dest: (rp.dest||[]).filter(n => allNicks.includes(n)), incidente: rp.incidente||"Ninguna", video: rp.video||""};
+    dest: (rp.dest||[]).filter(n => allNicks.includes(n)), incidente: rp.incidente||"Ninguna", video: rp.video||safeUrl(m.replayUrl)||""};
   const nickOpts = (list, sel, none) => (none ? '<option value="">'+none+'</option>' : '')+list.map(n => '<option'+(n===sel?' selected':'')+'>'+esc(n)+'</option>').join("");
   const usList = [...new Set([...D.us.starters, ...Object.keys(D.us.players)])], themList = [...new Set([...D.them.starters, ...Object.keys(D.them.players)])];
   body.innerHTML = '<div class="fields">'
@@ -443,7 +447,10 @@ function discordSection(){
     + '<div class="card"><div class="sub">Aviso de los partidos del día: un mensaje por partido, etiquetando el rol de la liga y con reacciones. Se manda con el botón <b>Avisar partidos de hoy</b> en Partidos.</div>'
     + (!disc.loaded ? '' : disc.gh && disc.chan ? '<div class="hint">Avisos configurados · canal '+esc(disc.chan)+' · reacciones: '+(esc(disc.emojis)||'ninguna')+'</div>' : '<div class="hint warn">Faltan configurar los avisos del día.</div>')
     + (disc.loaded ? (()=>{ const sin = S.leagues.filter(l => !l.role).length; return sin ? '<div class="hint">'+sin+' liga'+(sin>1?'s':'')+' sin rol de Discord: se van a nombrar sin etiquetar. Cargalo en <b>Editar</b> de cada liga.</div>' : ''; })() : '')
-    + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.gh ? 'Cambiar configuración' : 'Configurar avisos')+'</button></div></div></section>';
+    + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.gh ? 'Cambiar configuración' : 'Configurar avisos')+'</button></div></div>'
+    + '<div class="card"><div class="sub">Replays online: al subir una grabación a un partido, también se sube a <a href="https://replay.mrhosthaxball.com" target="_blank" rel="noopener">MrREPLAY</a> y el link queda en el partido y en el informe.</div>'
+    + (!disc.loaded ? '' : disc.mr ? '<div class="hint">MrREPLAY configurado.</div>' : '<div class="hint warn">Falta cargar el token de MrREPLAY.</div>')
+    + '<div class="acts"><button class="btn small" data-act="mr-config">'+(disc.mr ? 'Cambiar token' : 'Configurar MrREPLAY')+'</button></div></div></section>';
 }
 /* ---------- Discord: aviso de los partidos del día ----------
    Discord no deja que el navegador use el bot, así que la página le pide a GitHub que corra
@@ -498,12 +505,60 @@ function botConfigForm(){
     busy = false; if(gh) disc.gh = gh; disc.chan = chan; disc.emojis = emo; closeModal(); toast("Avisos configurados"); render();
   });
 }
+/* ---------- MrREPLAY: replays online ----------
+   API oficial de replay.mrhosthaxball.com (docs: /docs). El token se crea en su panel de API
+   y se guarda en privado/discord (solo capitanes). */
+const MR_API = "https://replay.mrhosthaxball.com/api/v1";
+async function uploadMr(bytes, fileName, m){
+  if(!/\.(hbr2|hbr)$/i.test(fileName||"")) throw new Error("MrREPLAY solo acepta archivos .hbr2 o .hbr.");
+  const l = S.leagues.find(x => x.id===m.league);
+  const title = ["Dark Empire vs "+(m.rival||"Rival"), l && l.name, m.round].filter(Boolean).join(" · ").slice(0,200);
+  const fd = new FormData();
+  fd.append("file", new Blob([bytes], {type:"application/octet-stream"}), fileName);
+  fd.append("title", title); fd.append("visibility", "public");
+  let r; try{ r = await fetch(MR_API+"/replays", {method:"POST", headers:{"Authorization":"Bearer "+disc.mr}, body: fd}); }
+  catch(e){ throw new Error("no hubo conexión con MrREPLAY."); }
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  const err = (j.error && j.error.message) || "";
+  if(r.status===401 || r.status===403) throw new Error("el token no es válido. Revisalo en Ligas → Discord → MrREPLAY.");
+  if(r.status===429) throw new Error("se llegó al límite diario de subidas. Probá mañana con “Subir a MrREPLAY”.");
+  if(!r.ok || j.success===false) throw new Error(err || "MrREPLAY respondió "+r.status+".");
+  const dd = j.data || j, id = dd.replayId || dd.id || "";
+  const url = safeUrl(dd.url) || (id ? "https://replay.mrhosthaxball.com/replay/"+encodeURIComponent(id) : "");
+  if(!url) throw new Error("MrREPLAY no devolvió el link.");
+  return url;
+}
+async function mrUploadSaved(m){
+  if(busy || !m.rec) return; busy = true; setSaving(true);
+  try{
+    const snap = await getDoc(doc(db,"grabaciones",m.rec.id)); if(!snap.exists()) throw new Error("no se encontró la grabación guardada.");
+    const url = await uploadMr(snap.data().data.toUint8Array(), m.rec.name || "replay.hbr2", m);
+    busy = false;
+    await commit(n => { const mm = n.matches.find(x => x.id===m.id); if(mm) mm.replayUrl = url; }, "Replay subido a MrREPLAY");
+  }catch(err){ console.error(err); busy = false; setSaving(false); toast("No se pudo subir a MrREPLAY: "+err.message); }
+}
+function mrConfigForm(){
+  openModal('<form id="mrf"><h2>MrREPLAY</h2>'
+    + '<div class="hint">Creá un token en el panel de API de <a href="https://replay.mrhosthaxball.com" target="_blank" rel="noopener">replay.mrhosthaxball.com</a> (entrás con Discord) y pegalo acá. Solo lo ven los capitanes.</div>'
+    + '<label class="f">Token de la API<input type="password" id="f-mrt" autocomplete="off" placeholder="'+(disc.mr ? 'Guardado (dejalo vacío para no cambiarlo)' : 'Pegá el token')+'"></label>'
+    + (disc.mr ? '<label class="f" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="f-mrdel"> Quitar el token (dejar de subir a MrREPLAY)</label>' : '')
+    + '<div class="hint" id="mrhint"></div>'+foot("")+'</form>');
+  document.getElementById("mrf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
+    const t = document.getElementById("f-mrt").value.trim(), del = document.getElementById("f-mrdel") && document.getElementById("f-mrdel").checked, hint = document.getElementById("mrhint");
+    if(!t && !del){ if(disc.mr){ closeModal(); return; } hint.textContent = "Falta el token."; hint.className = "hint warn"; return; }
+    if(t && (t.length < 10 || /\s/.test(t))){ hint.textContent = "Ese token no parece válido. Copialo completo, sin espacios."; hint.className = "hint warn"; return; }
+    busy = true; setSaving(true);
+    try{ await setDoc(doc(db,"privado","discord"), {mrToken: del ? null : t}, {merge:true}); }
+    catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar.")); return; }
+    busy = false; setSaving(false); disc.mr = del ? "" : t; closeModal(); toast(del ? "Token de MrREPLAY quitado" : "MrREPLAY configurado"); render();
+  });
+}
 async function loadDiscord(){
   try{
     const [p, c] = await Promise.all([getDoc(doc(db,"privado","discord")), getDoc(doc(db,"club","discord"))]);
     const pd = p.exists() ? p.data() : {};
     const cd = c.exists() ? c.data() : {};
-    disc.hook = pd.calWebhook || ""; disc.gh = pd.ghToken || ""; disc.daySent = pd.daySent || "";
+    disc.hook = pd.calWebhook || ""; disc.gh = pd.ghToken || ""; disc.daySent = pd.daySent || ""; disc.mr = pd.mrToken || "";
     disc.chan = cd.dayChannel || ""; disc.emojis = cd.dayEmojis!=null ? cd.dayEmojis : "✅ 🟡 ❌";
     disc.msgId = c.exists() ? (c.data().calMsgId || "") : "";
   }catch(e){ console.error(e); }
@@ -581,7 +636,8 @@ function matchForm(m){
     + '<label class="f">Día<input type="date" id="f-date" value="'+esc(m.date||"")+'"></label>'
     + '<label class="f">Hora<input type="time" id="f-time" value="'+esc(m.time||"")+'"></label>'
     + '</div>'
-    + '<div class="hint">¿Se reprogramó y todavía no tiene día? Dejá <b>Día</b> vacío: en Discord va a figurar en PENDIENTES.</div>'
+    + '<div class="hint">¿Se reprogramó y todavía no tiene día? Tocá <b>Dejar sin día</b>: en Discord va a figurar en PENDIENTES.</div>'
+    + '<div class="acts"><button type="button" class="btn ghost small" id="f-nodate">Dejar sin día</button><button type="button" class="btn ghost small" id="f-notime">Dejar sin hora</button></div>'
     + '<div class="seg" role="radiogroup" aria-label="Estado"><label><input type="radio" name="st" id="st-p" value="pendiente"'+(m.status!=="jugado"?' checked':'')+'>Pendiente</label><label><input type="radio" name="st" id="st-j" value="jugado"'+(m.status==="jugado"?' checked':'')+'>Jugado</label></div>'
     + '<div class="filein"><span>Grabación del partido (.hbr2)</span>'
     + (m.rec ? '<div class="recbox" id="recnow"><span style="color:var(--ink);font-weight:500">'+esc(m.rec.name)+' · '+kb(m.rec.size||0)+'</span><button type="button" class="btn ghost small" data-act="rec-rm">Quitar</button></div>' : '')
@@ -604,6 +660,9 @@ function matchForm(m){
     + foot(isNew ? "" : "¿Borrar este partido, sus estadísticas y su grabación?") + '</form>';
   openModal(h);
   const form = document.getElementById("mf"), $ = id => document.getElementById(id);
+  // En el celular el selector de fecha/hora no tiene botón para borrar: estos lo vacían.
+  $("f-nodate").addEventListener("click", () => { $("f-date").value = ""; toast("Sin día: queda en PENDIENTES al guardar"); });
+  $("f-notime").addEventListener("click", () => { $("f-time").value = ""; toast("Sin hora"); });
   function tally(){ const el=$("tally"); if(!el) return; let g=0,a=0;
     form.querySelectorAll("tr[data-p]").forEach(tr => { const id=tr.dataset.p; g+=+$("g-"+id).value||0; a+=+$("a-"+id).value||0; });
     const gf=+$("f-gf").value||0;
@@ -809,7 +868,7 @@ function matchForm(m){
   form.addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
     const st = form.querySelector('input[name="st"]:checked').value;
     const nm = {id:m.id, league:$("f-league").value, round:$("f-round").value.trim(), rival:$("f-rival").value.trim(),
-      date:$("f-date").value, time:$("f-time").value, notes:$("f-notes").value.trim(), status:st, rec: removeRec ? null : (m.rec||null)};
+      date:$("f-date").value, time:$("f-time").value, notes:$("f-notes").value.trim(), status:st, rec: removeRec ? null : (m.rec||null), replayUrl: removeRec ? null : (m.replayUrl||null)};
     if(!nm.rival){ $("f-rival").focus(); return; }
     nm.df = st==="jugado" && $("f-df").checked;
     if(nm.df){ nm.gf = 3; nm.gc = 0; nm.lineup = []; nm.mvp = null; }
@@ -825,7 +884,7 @@ function matchForm(m){
       const mv = form.querySelector('input[name="mvp"]:checked'); nm.mvp = mv ? mv.value : null;
     } else { nm.lineup = m.lineup || []; nm.mvp = m.mvp || null; nm.gf = m.gf ?? null; nm.gc = m.gc ?? null; }
     const file = $("f-rec").files[0];
-    const oldRec = m.rec;
+    const oldRec = m.rec; let mrFail = "";
     if(file){
       busy = true; setSaving(true);
       try{
@@ -834,6 +893,9 @@ function matchForm(m){
         await setDoc(doc(db,"grabaciones",recId), {data: Bytes.fromUint8Array(buf), name: file.name.slice(0,80), size: buf.length, match: m.id});
         nm.rec = {id: recId, name: file.name.slice(0,80), size: buf.length};
       }catch(err){ console.error(err); busy=false; setSaving(false); toast(errMsg(err, "No se pudo subir la grabación.")); return; }
+      nm.replayUrl = null;
+      if(disc.mr){ try{ nm.replayUrl = await uploadMr(new Uint8Array(await file.arrayBuffer()), file.name, nm); }
+        catch(err){ console.error(err); mrFail = err.message; } }
       busy = false;
     }
     const ok = await commit(n => { const i=n.matches.findIndex(x => x.id===nm.id); if(i<0) n.matches.push(nm); else n.matches[i]=nm;
@@ -841,6 +903,7 @@ function matchForm(m){
           const have = new Set([p.name, ...(p.aliases||[])].map(x => String(x).toLowerCase()));
           p.aliases = (p.aliases||[]).concat(aliasesToSave[pid].filter(a => !have.has(String(a).toLowerCase()))).slice(-30); } },
       isNew ? "Partido agregado al fixture" : (nm.df ? "Guardado como DF (3–0)" : st==="jugado" ? "Resultado guardado" : "Partido actualizado"));
+    if(ok && mrFail) setTimeout(() => toast("Se guardó, pero no se pudo subir a MrREPLAY: "+mrFail), 1800);
     if(ok && oldRec && (!nm.rec || nm.rec.id!==oldRec.id)) deleteDoc(doc(db,"grabaciones",oldRec.id)).catch(()=>{});
     if(!ok && file && nm.rec) deleteDoc(doc(db,"grabaciones",nm.rec.id)).catch(()=>{});
   });
@@ -999,6 +1062,8 @@ document.addEventListener("click", e => {
   if(a==="club") clubForm();
   if(a==="dc-config") discordConfigForm();
   if(a==="bot-config") botConfigForm();
+  if(a==="mr-config") mrConfigForm();
+  if(a==="mr-up"){ const m = S.matches.find(x => x.id===id); if(m) mrUploadSaved(m); return; }
   if(a==="day-notice") dayNoticeForm();
   if(a==="dc-preview") discordPreview();
   if(a==="dc-sync") syncDiscord(false, true);
