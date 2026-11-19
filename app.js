@@ -22,7 +22,7 @@ const modalHost = document.createElement("div"); document.body.appendChild(modal
 let S = null;               // estado del club (null = cargando)
 let loadError = null;
 let canWrite = false, user = null, busy = false;
-const disc = {hook:"", msgId:"", last:"", loaded:false, gh:"", chan:"", emojis:"✅ 🟡 ❌", daySent:"", mr:""};
+const disc = {hook:"", msgId:"", last:"", loaded:false, gh:"", chan:"", emojis:"✅ 🟡 ❌", daySent:"", thxT:"", thxK:""};
 const ui = {tab:"partidos", league:"all", sort:"g", open:null, cal: todayStr().slice(0,7)};
 ui.leagues = []; ui.groups = []; ui.statMode = "liga"; ui.fOpen = false;   // filtros: vacío = todas
 try{ const sv = JSON.parse(localStorage.getItem("hx_ui") || "null"); if(sv){ ui.leagues = Array.isArray(sv.leagues) ? sv.leagues : []; ui.groups = Array.isArray(sv.groups) ? sv.groups : []; ui.statMode = sv.statMode==="grupo" ? "grupo" : "liga"; ui.sort = sv.sort || "g"; } }catch(e){}
@@ -188,10 +188,10 @@ function matchInfo(m){
       const pj = (m.lineup||[]).map(x => esc(pname(x.p))).join(", ");
       h += '<dl><dt>Goles</dt><dd>'+(list("g")||"—")+'</dd><dt>Asistencias</dt><dd>'+(list("a")||"—")+'</dd><dt>Figura</dt><dd>'+(m.mvp?esc(pname(m.mvp)):"—")+'</dd><dt>Jugaron</dt><dd>'+(pj||"—")+'</dd>'+(m.notes?'<dt>Notas</dt><dd>'+esc(m.notes)+'</dd>':'')+'</dl>';
     } else if(m.notes){ h += '<div>'+esc(m.notes)+'</div>'; }
-    const rurl = safeUrl(m.replayUrl);
+    const rurl = replayLink(m);
     if(m.rec || rurl) h += '<div class="recbox">'+(rurl ? '<a class="btn small" href="'+esc(rurl)+'" target="_blank" rel="noopener">Ver replay online ↗</a>' : '')
       + (m.rec ? '<button class="btn small'+(rurl?' ghost':'')+'" data-act="rec-dl" data-id="'+esc(m.id)+'">Descargar grabación ('+kb(m.rec.size||0)+')</button>' : '')
-      + (canWrite && m.rec && !rurl && disc.mr ? '<button class="btn small ghost" data-act="mr-up" data-id="'+esc(m.id)+'">Subir a MrREPLAY</button>' : '')
+      + (canWrite && m.rec && !safeUrl(m.replayUrl) && disc.thxK ? '<button class="btn small ghost" data-act="thx-up" data-id="'+esc(m.id)+'">Subir a TheHax</button>' : '')
       + (!rurl ? '<span class="hint">Para verla, abrila en <a href="https://www.haxball.com/replay" target="_blank" rel="noopener">haxball.com/replay</a>.</span>' : '')+'</div>';
     if(canWrite) h += '<div class="acts"><button class="btn small ghost" data-act="m-edit" data-id="'+esc(m.id)+'">'+(r?'Editar resultado':'Cargar resultado / editar')+'</button>'+(r && r!=="DF" && m.rec ? '<button class="btn small ghost" data-act="m-report" data-id="'+esc(m.id)+'">Informe</button>' : '')+'</div>';
   if(!h) h = '<div class="hint">'+(r ? 'Sin detalles cargados.' : 'Partido programado.')+'</div>';
@@ -276,7 +276,7 @@ async function reportModal(m){
   if(!figDefault && m.mvp){ const p = P(m.mvp); if(p) figDefault = [...D.us.starters, ...Object.keys(D.us.players)].find(n => { const r = matchNick(n, [{id:p.id, name:p.name, aliases:p.aliases||[]}]); return r && r.score >= 0.84; }) || ""; }
   const f = {compEmoji: l.repEmoji||"", title: l.repTitle||l.name||"", round: m.round||"", ourName: l.repTeam||"Dark Empire", ourEmoji: l.repTeamEmoji||"",
     rivName: m.rival||"", rivEmoji: m.rivalEmoji||"", gkUs: rp.gkUs||D.us.gkAuto, gkThem: rp.gkThem||D.them.gkAuto, figura: figDefault,
-    dest: (rp.dest||[]).filter(n => allNicks.includes(n)), incidente: rp.incidente||"Ninguna", video: rp.video||safeUrl(m.replayUrl)||""};
+    dest: (rp.dest||[]).filter(n => allNicks.includes(n)), incidente: rp.incidente||"Ninguna", video: rp.video||replayLink(m)||""};
   const nickOpts = (list, sel, none) => (none ? '<option value="">'+none+'</option>' : '')+list.map(n => '<option'+(n===sel?' selected':'')+'>'+esc(n)+'</option>').join("");
   const usList = [...new Set([...D.us.starters, ...Object.keys(D.us.players)])], themList = [...new Set([...D.them.starters, ...Object.keys(D.them.players)])];
   body.innerHTML = '<div class="fields">'
@@ -448,9 +448,10 @@ function discordSection(){
     + (!disc.loaded ? '' : disc.gh && disc.chan ? '<div class="hint">Avisos configurados · canal '+esc(disc.chan)+' · reacciones: '+(esc(disc.emojis)||'ninguna')+'</div>' : '<div class="hint warn">Faltan configurar los avisos del día.</div>')
     + (disc.loaded ? (()=>{ const sin = S.leagues.filter(l => !l.role).length; return sin ? '<div class="hint">'+sin+' liga'+(sin>1?'s':'')+' sin rol de Discord: se van a nombrar sin etiquetar. Cargalo en <b>Editar</b> de cada liga.</div>' : ''; })() : '')
     + '<div class="acts"><button class="btn small" data-act="bot-config">'+(disc.gh ? 'Cambiar configuración' : 'Configurar avisos')+'</button></div></div>'
-    + '<div class="card"><div class="sub">Replays online: al subir una grabación a un partido, también se sube a <a href="https://replay.mrhosthaxball.com" target="_blank" rel="noopener">MrREPLAY</a> y el link queda en el partido y en el informe.</div>'
-    + (!disc.loaded ? '' : disc.mr ? '<div class="hint">MrREPLAY configurado.</div>' : '<div class="hint warn">Falta cargar el token de MrREPLAY.</div>')
-    + '<div class="acts"><button class="btn small" data-act="mr-config">'+(disc.mr ? 'Cambiar token' : 'Configurar MrREPLAY')+'</button></div></div></section>';
+    + '<div class="card"><div class="sub">Replays online: al subir una grabación a un partido, se sube también a <a href="https://replay.thehax.pl" target="_blank" rel="noopener">TheHax</a> y el link queda en el partido y en el informe.</div>'
+    + (!disc.loaded ? '' : disc.thxK ? '<div class="hint">TheHax configurado.</div>' : '<div class="hint warn">Faltan las claves de TheHax.</div>')
+    + (replayBase() ? '<div class="hint">Respaldo: si un partido no está en TheHax, el link lo entrega el bot ('+esc(replayBase())+').</div>' : '')
+    + '<div class="acts"><button class="btn small" data-act="thx-config">'+(disc.thxK ? 'Cambiar claves' : 'Configurar TheHax')+'</button><button class="btn ghost small" data-act="rp-config">'+(replayBase() ? 'Cambiar respaldo (bot)' : 'Respaldo con el bot')+'</button></div></div></section>';
 }
 /* ---------- Discord: aviso de los partidos del día ----------
    Discord no deja que el navegador use el bot, así que la página le pide a GitHub que corra
@@ -505,52 +506,75 @@ function botConfigForm(){
     busy = false; if(gh) disc.gh = gh; disc.chan = chan; disc.emojis = emo; closeModal(); toast("Avisos configurados"); render();
   });
 }
-/* ---------- MrREPLAY: replays online ----------
-   API oficial de replay.mrhosthaxball.com (docs: /docs). El token se crea en su panel de API
-   y se guarda en privado/discord (solo capitanes). */
-const MR_API = "https://replay.mrhosthaxball.com/api/v1";
-async function uploadMr(bytes, fileName, m){
-  if(!/\.(hbr2|hbr)$/i.test(fileName||"")) throw new Error("MrREPLAY solo acepta archivos .hbr2 o .hbr.");
-  const l = S.leagues.find(x => x.id===m.league);
-  const title = ["Dark Empire vs "+(m.rival||"Rival"), l && l.name, m.round].filter(Boolean).join(" · ").slice(0,200);
-  const fd = new FormData();
-  fd.append("file", new Blob([bytes], {type:"application/octet-stream"}), fileName);
-  fd.append("title", title); fd.append("visibility", "public");
-  let r; try{ r = await fetch(MR_API+"/replays", {method:"POST", headers:{"Authorization":"Bearer "+disc.mr}, body: fd}); }
-  catch(e){ throw new Error("no hubo conexión con MrREPLAY."); }
-  let j = {}; try{ j = await r.json(); }catch(e){}
-  const err = (j.error && j.error.message) || "";
-  if(r.status===401 || r.status===403) throw new Error("el token no es válido. Revisalo en Ligas → Discord → MrREPLAY.");
-  if(r.status===429) throw new Error("se llegó al límite diario de subidas. Probá mañana con “Subir a MrREPLAY”.");
-  if(!r.ok || j.success===false) throw new Error(err || "MrREPLAY respondió "+r.status+".");
-  const dd = j.data || j, id = dd.replayId || dd.id || "";
-  const url = safeUrl(dd.url) || (id ? "https://replay.mrhosthaxball.com/replay/"+encodeURIComponent(id) : "");
-  if(!url) throw new Error("MrREPLAY no devolvió el link.");
-  return url;
+/* ---------- Replays online ----------
+   El bot de Cloudflare entrega la grabación guardada en Firebase en https://<bot>/r/<id>.hbr2 (con CORS abierto),
+   y el reproductor oficial de Haxball la abre con https://www.haxball.com/replay?v=3#<esa dirección>.
+   Así el link no muestra la dirección de la página. La dirección del bot se guarda en club/datos (club.replayBase). */
+function replayBase(){ const u = safeUrl(S && S.club && S.club.replayBase); return u ? u.replace(/\/+$/, "") : ""; }
+function replayLink(m){
+  const own = safeUrl(m && m.replayUrl); if(own) return own;   // link de TheHax
+  const base = replayBase();
+  if(!base || !m || !m.rec || !m.rec.id || !/\.hbr2$/i.test(m.rec.name || ".hbr2")) return "";
+  return "https://www.haxball.com/replay?v="+(m.rec.ver || 3)+"#"+base+"/r/"+encodeURIComponent(m.rec.id)+".hbr2";
 }
-async function mrUploadSaved(m){
+// TheHax (replay.thehax.pl): API con "API-Tenant" + "API-Key". Las claves quedan en privado/discord (solo capitanes).
+async function uploadTheHax(bytes, m){
+  if(!disc.thxT || !disc.thxK) throw new Error("faltan las claves de TheHax.");
+  if(String.fromCharCode(...bytes.subarray(0,4))!=="HBR2") throw new Error("el archivo no es una grabación .hbr2.");
+  const l = S.leagues.find(x => x.id===m.league);
+  const fd = new FormData();
+  fd.append("replay[name]", ["Dark Empire vs "+(m.rival||"Rival"), l && l.name, m.round].filter(Boolean).join(" · ").slice(0,150));
+  fd.append("replay[private]", "false");
+  fd.append("replay[fileContent]", bytes.toString());
+  let r; try{ r = await fetch("https://replay.thehax.pl/api/upload", {method:"POST", headers:{"API-Tenant": disc.thxT, "API-Key": disc.thxK}, body: fd}); }
+  catch(e){ throw new Error("TheHax no dejó conectarse desde la página."); }
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(j.success && safeUrl(j.url)) return safeUrl(j.url);
+  if(r.status===401 || j.code===401) throw new Error("las claves de TheHax no son válidas.");
+  const det = (j.errors||[]).map(e => e.message).filter(Boolean).join(" ");
+  throw new Error(det || j.message || "TheHax respondió "+r.status+".");
+}
+async function theHaxSaved(m){
   if(busy || !m.rec) return; busy = true; setSaving(true);
   try{
     const snap = await getDoc(doc(db,"grabaciones",m.rec.id)); if(!snap.exists()) throw new Error("no se encontró la grabación guardada.");
-    const url = await uploadMr(snap.data().data.toUint8Array(), m.rec.name || "replay.hbr2", m);
+    const url = await uploadTheHax(snap.data().data.toUint8Array(), m);
     busy = false;
-    await commit(n => { const mm = n.matches.find(x => x.id===m.id); if(mm) mm.replayUrl = url; }, "Replay subido a MrREPLAY");
-  }catch(err){ console.error(err); busy = false; setSaving(false); toast("No se pudo subir a MrREPLAY: "+err.message); }
+    await commit(n => { const mm = n.matches.find(x => x.id===m.id); if(mm) mm.replayUrl = url; }, "Replay subido a TheHax");
+  }catch(err){ console.error(err); busy = false; setSaving(false); toast("No se pudo subir a TheHax: "+err.message); }
 }
-function mrConfigForm(){
-  openModal('<form id="mrf"><h2>MrREPLAY</h2>'
-    + '<div class="hint">Creá un token en el panel de API de <a href="https://replay.mrhosthaxball.com" target="_blank" rel="noopener">replay.mrhosthaxball.com</a> (entrás con Discord) y pegalo acá. Solo lo ven los capitanes.</div>'
-    + '<label class="f">Token de la API<input type="password" id="f-mrt" autocomplete="off" placeholder="'+(disc.mr ? 'Guardado (dejalo vacío para no cambiarlo)' : 'Pegá el token')+'"></label>'
-    + (disc.mr ? '<label class="f" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="f-mrdel"> Quitar el token (dejar de subir a MrREPLAY)</label>' : '')
-    + '<div class="hint" id="mrhint"></div>'+foot("")+'</form>');
-  document.getElementById("mrf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
-    const t = document.getElementById("f-mrt").value.trim(), del = document.getElementById("f-mrdel") && document.getElementById("f-mrdel").checked, hint = document.getElementById("mrhint");
-    if(!t && !del){ if(disc.mr){ closeModal(); return; } hint.textContent = "Falta el token."; hint.className = "hint warn"; return; }
-    if(t && (t.length < 10 || /\s/.test(t))){ hint.textContent = "Ese token no parece válido. Copialo completo, sin espacios."; hint.className = "hint warn"; return; }
+function theHaxConfigForm(){
+  openModal('<form id="thf"><h2>TheHax</h2>'
+    + '<div class="hint">En <a href="https://replay.thehax.pl/apiKeys" target="_blank" rel="noopener">replay.thehax.pl → API keys</a> están las dos claves. Solo las ven los capitanes.</div>'
+    + '<label class="f">Tenant key<input type="password" id="f-tht" autocomplete="off" placeholder="'+(disc.thxT ? 'Guardada (dejala vacía para no cambiarla)' : 'ut_…')+'"></label>'
+    + '<label class="f">API key<input type="password" id="f-thk" autocomplete="off" placeholder="'+(disc.thxK ? 'Guardada (dejala vacía para no cambiarla)' : 'ukt_…')+'"></label>'
+    + (disc.thxK ? '<label class="f" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="f-thdel"> Quitar las claves (dejar de subir a TheHax)</label>' : '')
+    + '<div class="hint" id="thhint"></div>'+foot("")+'</form>');
+  document.getElementById("thf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
+    const t = document.getElementById("f-tht").value.trim() || disc.thxT, k = document.getElementById("f-thk").value.trim() || disc.thxK;
+    const del = document.getElementById("f-thdel") && document.getElementById("f-thdel").checked, hint = document.getElementById("thhint");
+    if(!del){
+      if(!/^ut_[A-Za-z0-9]{8,}$/.test(t)){ hint.textContent = "La tenant key empieza con ut_ (copiala completa)."; hint.className = "hint warn"; return; }
+      if(!/^ukt_[A-Za-z0-9]{8,}$/.test(k)){ hint.textContent = "La API key empieza con ukt_ (copiala completa)."; hint.className = "hint warn"; return; }
+    }
     busy = true; setSaving(true);
-    try{ await setDoc(doc(db,"privado","discord"), {mrToken: del ? null : t}, {merge:true}); }
+    try{ await setDoc(doc(db,"privado","discord"), del ? {thxTenant: null, thxKey: null} : {thxTenant: t, thxKey: k}, {merge:true}); }
     catch(err){ console.error(err); busy = false; setSaving(false); toast(errMsg(err, "No se pudo guardar.")); return; }
-    busy = false; setSaving(false); disc.mr = del ? "" : t; closeModal(); toast(del ? "Token de MrREPLAY quitado" : "MrREPLAY configurado"); render();
+    busy = false; setSaving(false); disc.thxT = del ? "" : t; disc.thxK = del ? "" : k; closeModal(); toast(del ? "Claves de TheHax quitadas" : "TheHax configurado"); render();
+  });
+}
+function replayConfigForm(){
+  openModal('<form id="rpf"><h2>Replays online</h2>'
+    + '<label class="f">Dirección del bot de Cloudflare<input type="text" id="f-rpb" autocomplete="off" placeholder="https://dark-empire-bot.xxxx.workers.dev" value="'+esc(replayBase())+'"><span class="hint">La misma dirección que pusiste en Discord como Interactions Endpoint URL. Tiene que tener el worker.js nuevo.</span></label>'
+    + '<div class="hint" id="rphint"></div>'+foot("")+'</form>');
+  document.getElementById("rpf").addEventListener("submit", async e => { e.preventDefault(); if(busy) return;
+    const v = document.getElementById("f-rpb").value.trim().replace(/\/+$/, ""), hint = document.getElementById("rphint");
+    if(v && !/^https:\/\/[a-z0-9.-]+\.workers\.dev$/i.test(v)){ hint.textContent = "Tiene que ser la dirección del bot, del tipo https://algo.workers.dev"; hint.className = "hint warn"; return; }
+    if(v){ hint.textContent = "Probando la conexión con el bot…"; hint.className = "hint";
+      try{ const r = await fetch(v+"/r/ping"); if(!r.ok) throw 0; }
+      catch(err){ hint.textContent = "El bot no respondió. Revisá la dirección y que tenga el worker.js nuevo (con Deploy)."; hint.className = "hint warn"; return; } }
+    closeModal();
+    commit(n => { n.club = n.club || {}; n.club.replayBase = v || null; }, v ? "Replays online configurados" : "Replays online desactivados");
   });
 }
 async function loadDiscord(){
@@ -558,7 +582,7 @@ async function loadDiscord(){
     const [p, c] = await Promise.all([getDoc(doc(db,"privado","discord")), getDoc(doc(db,"club","discord"))]);
     const pd = p.exists() ? p.data() : {};
     const cd = c.exists() ? c.data() : {};
-    disc.hook = pd.calWebhook || ""; disc.gh = pd.ghToken || ""; disc.daySent = pd.daySent || ""; disc.mr = pd.mrToken || "";
+    disc.hook = pd.calWebhook || ""; disc.gh = pd.ghToken || ""; disc.daySent = pd.daySent || ""; disc.thxT = pd.thxTenant || ""; disc.thxK = pd.thxKey || "";
     disc.chan = cd.dayChannel || ""; disc.emojis = cd.dayEmojis!=null ? cd.dayEmojis : "✅ 🟡 ❌";
     disc.msgId = c.exists() ? (c.data().calMsgId || "") : "";
   }catch(e){ console.error(e); }
@@ -884,7 +908,7 @@ function matchForm(m){
       const mv = form.querySelector('input[name="mvp"]:checked'); nm.mvp = mv ? mv.value : null;
     } else { nm.lineup = m.lineup || []; nm.mvp = m.mvp || null; nm.gf = m.gf ?? null; nm.gc = m.gc ?? null; }
     const file = $("f-rec").files[0];
-    const oldRec = m.rec; let mrFail = "";
+    const oldRec = m.rec; let thxFail = "";
     if(file){
       busy = true; setSaving(true);
       try{
@@ -892,10 +916,10 @@ function matchForm(m){
         const recId = uid();
         await setDoc(doc(db,"grabaciones",recId), {data: Bytes.fromUint8Array(buf), name: file.name.slice(0,80), size: buf.length, match: m.id});
         nm.rec = {id: recId, name: file.name.slice(0,80), size: buf.length};
+        if(String.fromCharCode(...buf.subarray(0,4))==="HBR2") nm.rec.ver = ((buf[4]<<24 | buf[5]<<16 | buf[6]<<8 | buf[7]) >>> 0) || 3;
+        nm.replayUrl = null;
+        if(disc.thxK){ try{ nm.replayUrl = await uploadTheHax(buf, nm); } catch(err){ console.error(err); thxFail = err.message; } }
       }catch(err){ console.error(err); busy=false; setSaving(false); toast(errMsg(err, "No se pudo subir la grabación.")); return; }
-      nm.replayUrl = null;
-      if(disc.mr){ try{ nm.replayUrl = await uploadMr(new Uint8Array(await file.arrayBuffer()), file.name, nm); }
-        catch(err){ console.error(err); mrFail = err.message; } }
       busy = false;
     }
     const ok = await commit(n => { const i=n.matches.findIndex(x => x.id===nm.id); if(i<0) n.matches.push(nm); else n.matches[i]=nm;
@@ -903,7 +927,7 @@ function matchForm(m){
           const have = new Set([p.name, ...(p.aliases||[])].map(x => String(x).toLowerCase()));
           p.aliases = (p.aliases||[]).concat(aliasesToSave[pid].filter(a => !have.has(String(a).toLowerCase()))).slice(-30); } },
       isNew ? "Partido agregado al fixture" : (nm.df ? "Guardado como DF (3–0)" : st==="jugado" ? "Resultado guardado" : "Partido actualizado"));
-    if(ok && mrFail) setTimeout(() => toast("Se guardó, pero no se pudo subir a MrREPLAY: "+mrFail), 1800);
+    if(ok && thxFail) setTimeout(() => toast("Se guardó, pero no se pudo subir a TheHax: "+thxFail), 1800);
     if(ok && oldRec && (!nm.rec || nm.rec.id!==oldRec.id)) deleteDoc(doc(db,"grabaciones",oldRec.id)).catch(()=>{});
     if(!ok && file && nm.rec) deleteDoc(doc(db,"grabaciones",nm.rec.id)).catch(()=>{});
   });
@@ -1062,8 +1086,9 @@ document.addEventListener("click", e => {
   if(a==="club") clubForm();
   if(a==="dc-config") discordConfigForm();
   if(a==="bot-config") botConfigForm();
-  if(a==="mr-config") mrConfigForm();
-  if(a==="mr-up"){ const m = S.matches.find(x => x.id===id); if(m) mrUploadSaved(m); return; }
+  if(a==="rp-config") replayConfigForm();
+  if(a==="thx-config") theHaxConfigForm();
+  if(a==="thx-up"){ const m = S.matches.find(x => x.id===id); if(m) theHaxSaved(m); return; }
   if(a==="day-notice") dayNoticeForm();
   if(a==="dc-preview") discordPreview();
   if(a==="dc-sync") syncDiscord(false, true);
